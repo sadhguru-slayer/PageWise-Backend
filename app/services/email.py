@@ -13,9 +13,9 @@ SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM = os.getenv("SMTP_FROM", os.getenv("SMTP_USER", "security@resumo.studio"))
+SMTP_FROM = os.getenv("SMTP_FROM", os.getenv("SMTP_USER", "security@pagewise.studio"))
 
-_BRAND = "Resumo Studio"
+_BRAND = "PageWise Studio"
 _BRAND_COLOR = "#f59e0b"  # Amber 500
 _PREVIEW_DIR = pathlib.Path(__file__).resolve().parent.parent.parent / "email_previews"
 
@@ -26,7 +26,7 @@ def _build_otp_email_html(otp_code: str, purpose: OTPPurpose) -> tuple[str, str,
         subtitle = "A request was made to update your studio password from inside your profile."
     else:
         title = "Password Reset Request"
-        subtitle = "We received a request to reset your Resumo Studio account password."
+        subtitle = "We received a request to reset your PageWise Studio account password."
 
     subject = f"[{_BRAND}] {title} — {otp_code}"
 
@@ -42,7 +42,7 @@ def _build_otp_email_html(otp_code: str, purpose: OTPPurpose) -> tuple[str, str,
     .wrap {{ width: 100%; padding: 48px 16px; background: #090B10; }}
     .card {{ max-width: 480px; margin: 0 auto; background: #111420; border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.4); }}
     .header {{ padding: 32px 32px 24px; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.06); }}
-    .logo-badge {{ display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, #d97706, #b45309); color: #fff; font-size: 20px; font-weight: 800; margin-bottom: 12px; }}
+    .logo-badge {{ display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; background: linear-gradient(135deg, #d97706, #b45309); color: #fff; font-size: 16px; font-weight: 800; font-family: monospace; margin-bottom: 12px; }}
     .header h1 {{ font-size: 20px; font-weight: 700; color: #ffffff; letter-spacing: -0.3px; }}
     .body {{ padding: 32px; text-align: center; }}
     .desc {{ font-size: 13px; color: #94a3b8; line-height: 1.6; margin-bottom: 24px; }}
@@ -55,7 +55,7 @@ def _build_otp_email_html(otp_code: str, purpose: OTPPurpose) -> tuple[str, str,
   <div class="wrap">
     <div class="card">
       <div class="header">
-        <div class="logo-badge">R</div>
+        <div class="logo-badge">PW</div>
         <h1>{title}</h1>
       </div>
       <div class="body">
@@ -69,7 +69,7 @@ def _build_otp_email_html(otp_code: str, purpose: OTPPurpose) -> tuple[str, str,
         </div>
       </div>
       <div class="footer">
-        Resumo Resume Studio &bull; Precision ATS Intelligence<br/>
+        PageWise Studio &bull; Precision ATS Intelligence<br/>
         This is an automated security transmission.
       </div>
     </div>
@@ -110,6 +110,7 @@ def send_otp_email(to_email: str, otp_code: str, purpose: OTPPurpose):
         f"\n======================================================\n"
         f" [OTP EMAIL DISPATCH]\n"
         f" To: {to_email}\n"
+        f" Brand: {_BRAND}\n"
         f" Purpose: {purpose.value}\n"
         f" Code: >>> {otp_code} <<<\n"
         f" Expires: 10 minutes\n"

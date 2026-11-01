@@ -14,7 +14,7 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 _in_memory_store = {}
 
 
-class ResumoRedisClient:
+class PageWiseRedisClient:
     """Async Redis client with automatic local fallback if Redis server is temporarily unreachable."""
 
     def __init__(self):
@@ -98,4 +98,4 @@ class ResumoRedisClient:
         return True
 
 
-redis_client = ResumoRedisClient()
+redis_client = PageWiseRedisClient()

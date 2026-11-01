@@ -9,7 +9,7 @@ class OTPPurpose(str, Enum):
 
 
 class OTPService:
-    PREFIX = "resumo_otp"
+    PREFIX = "pagewise_otp"
 
     @classmethod
     def key(cls, purpose: OTPPurpose | str, email: str) -> str:

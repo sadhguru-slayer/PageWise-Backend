@@ -2,7 +2,7 @@
     # Global options
 }
 
-# Public HTTP / HTTPS reverse proxy for Resumo FastAPI backend
+# Public HTTP / HTTPS reverse proxy for PageWise Studio FastAPI backend
 :80 {
     reverse_proxy fastapi:8000 {
         header_up Host {host}

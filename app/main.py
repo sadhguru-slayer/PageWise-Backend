@@ -30,8 +30,8 @@ except Exception:
     pass
 
 app = FastAPI(
-    title="Resumo API",
-    description="Backend API for Resumo Resume Builder application",
+    title="PageWise Studio API",
+    description="Backend API for PageWise Resume Studio application",
     version="2.5.0",
 )
 
@@ -64,7 +64,7 @@ app.include_router(exports.router)
 def root():
     return {
         "status": "online",
-        "service": "Resumo API",
+        "service": "PageWise Studio API",
         "version": "2.5.0",
         "docs": "/docs",
     }

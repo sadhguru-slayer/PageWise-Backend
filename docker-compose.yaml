@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: chat-application
+    container_name: pagewise-api
 
     # Only accessible from the OCI VM itself.
     # Caddy handles public HTTP/HTTPS traffic.
@@ -42,7 +42,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: chat-application-alembic
+    container_name: pagewise-alembic
 
     depends_on:
       postgres:
@@ -60,7 +60,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: chat-application-redis
+    container_name: pagewise-redis
 
     restart: unless-stopped
 
@@ -75,14 +75,14 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: chat-application-postgres
+    container_name: pagewise-postgres
 
     restart: unless-stopped
 
     environment:
-      POSTGRES_USER: chatuser
-      POSTGRES_PASSWORD: chatpassword
-      POSTGRES_DB: chatdb
+      POSTGRES_USER: pagewiseuser
+      POSTGRES_PASSWORD: pagewisepassword
+      POSTGRES_DB: pagewisedb
 
     # PostgreSQL does NOT need to be publicly accessible.
     # Remove this if your application is the only client.
@@ -90,7 +90,7 @@ services:
       - "127.0.0.1:5432:5432"
 
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - pagewise_postgres_data:/var/lib/postgresql/data
 
     mem_limit: 512m
     mem_reservation: 256m
@@ -98,7 +98,7 @@ services:
   # Reverse proxy + HTTPS
   caddy:
     image: caddy:2-alpine
-    container_name: fieldchat-caddy
+    container_name: pagewise-caddy
 
     restart: unless-stopped
 
@@ -108,8 +108,8 @@ services:
 
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - pagewise_caddy_data:/data
+      - pagewise_caddy_config:/config
 
     depends_on:
       - fastapi
@@ -118,6 +118,6 @@ services:
     mem_reservation: 64m
 
 volumes:
-  postgres_data:
-  caddy_data:
-  caddy_config:
+  pagewise_postgres_data:
+  pagewise_caddy_data:
+  pagewise_caddy_config:
