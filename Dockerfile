@@ -5,7 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Copy pre-downloaded wheels and install them offline (no PyPI network calls)
+# Copy pre-downloaded wheels and requirements, then install offline (no PyPI network calls)
+COPY requirements.txt .
 COPY wheels/ /wheels/
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt
 
