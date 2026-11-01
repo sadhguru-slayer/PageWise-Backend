@@ -2,7 +2,7 @@ services:
   fastapi:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
     container_name: pagewise-api
 
     # Internal port on host. Caddy proxies public traffic.
@@ -38,7 +38,7 @@ services:
       - migration
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.prod
     container_name: pagewise-alembic
 
     depends_on:
