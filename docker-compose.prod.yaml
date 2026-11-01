@@ -17,7 +17,7 @@ services:
       - "127.0.0.1:8000:8000"
     volumes:
       # Persist user-generated PDF & DOCX resumes across container recreations
-      - ./exports:/app/exports
+      - resumo_exports_data:/app/exports
     depends_on:
       postgres:
         condition: service_healthy
@@ -142,3 +142,4 @@ volumes:
   resumo_postgres_data:
   resumo_caddy_data:
   resumo_caddy_config:
+  resumo_exports_data:

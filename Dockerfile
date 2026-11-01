@@ -1,4 +1,3 @@
-
 # syntax=docker/dockerfile:1.7
 
 FROM python:3.12-slim-bookworm
@@ -7,12 +6,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=1000 \
-    PIP_RETRIES=10
+    PIP_RETRIES=10 \
+    HOME=/home/app \
+    XDG_CACHE_HOME=/home/app/.cache
 
 WORKDIR /app
 
-# System dependencies
+# System dependencies (including fontconfig for font rendering & cache)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    fontconfig \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
     libharfbuzz0b \
@@ -31,8 +33,10 @@ RUN --mount=type=cache,id=pagewise-pip-cache,target=/root/.cache/pip,sharing=loc
 COPY . .
 
 # Run without root privileges
-RUN useradd --system --no-create-home app && \
-    chown -R app:app /app
+RUN useradd --create-home --user-group --uid 1000 app && \
+    mkdir -p /home/app/.cache/fontconfig /var/cache/fontconfig /app/exports && \
+    chown -R app:app /home/app /var/cache/fontconfig /app && \
+    fc-cache -fv
 
 USER app
 
