@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 # Prevent Python from writing pyc files
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -6,23 +6,20 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Prevent Python from buffering stdout/stderr
 ENV PYTHONUNBUFFERED=1
 
+ENV PIP_DEFAULT_TIMEOUT=120
+ENV PIP_RETRIES=5
+
 WORKDIR /app
 
-# Install minimal system utilities
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python dependencies using pre-compiled binary wheels
+# Install Python dependencies (all wheels, no gcc/apt-get required)
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install -v --no-cache-dir -r requirements.txt
 
-# Install Playwright browser dependencies and chromium headless for PDF export (optional in dev)
-RUN python -m playwright install --with-deps chromium || true
+# Install Playwright Chromium browser
+RUN python -m playwright install chromium
 
-# Copy application source code
+# Copy project
 COPY . .
 
 EXPOSE 8000
