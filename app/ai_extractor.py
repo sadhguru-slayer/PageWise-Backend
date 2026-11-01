@@ -82,10 +82,10 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return combined_text
 
 
-def parse_resume_with_gemini(extracted_text: str) -> dict:
+def parse_resume_with_gemini(extracted_text: str, allow_bold_text: bool = False) -> dict:
     """
     Uses Google GenAI SDK (google-genai) with Gemini Flash models to parse raw resume text
-    into a structured Resume Header and individual Sections.
+    into a structured Resume Header and individual Sections using an external prompt file.
     """
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
@@ -96,75 +96,18 @@ def parse_resume_with_gemini(extracted_text: str) -> dict:
 
     client = genai.Client(api_key=api_key)
 
-    prompt = f"""
-You are an expert ATS resume parser. Your task is to analyze the following raw text extracted from a resume PDF and convert it into a structured, high-fidelity JSON object.
+    # Load prompt from separate prompt file
+    prompt_file_path = os.path.join(os.path.dirname(__file__), "prompts", "resume_parser.prompt")
+    with open(prompt_file_path, "r", encoding="utf-8") as pf:
+        prompt_template = pf.read()
 
-Output MUST be valid JSON adhering strictly to this schema:
-{{
-  "header": {{
-    "name": "Candidate Full Name",
-    "email": "candidate@example.com",
-    "phone": "+1 ...",
-    "location": "City, State / Country",
-    "linkedin": "full URL or username",
-    "github": "full URL or username",
-    "website": "portfolio or website URL",
-    "contactLine": "email • phone • location",
-    "customLinks": [
-      {{ "id": "l-1", "label": "Portfolio", "url": "https://..." }}
-    ]
-  }},
-  "sections": [
-    {{
-      "id": "sec-1",
-      "title": "Professional Summary",
-      "visible": true,
-      "order": 0,
-      "contentHtml": "<p>High impact summary...</p>"
-    }},
-    {{
-      "id": "sec-2",
-      "title": "Work Experience",
-      "visible": true,
-      "order": 1,
-      "contentHtml": "<p><strong>Job Title</strong> — Company Name (2021 – Present)</p><ul><li>Key achievement with quantifiable metric</li><li>Another responsibility or accomplishment</li></ul>"
-    }},
-    {{
-      "id": "sec-3",
-      "title": "Education",
-      "visible": true,
-      "order": 2,
-      "contentHtml": "<p><strong>Degree Name</strong> — University Name (Year)</p>"
-    }},
-    {{
-      "id": "sec-4",
-      "title": "Skills",
-      "visible": true,
-      "order": 3,
-      "contentHtml": "<p><strong>Languages:</strong> Python, JavaScript, TypeScript</p><p><strong>Frameworks:</strong> React, Next.js, FastAPI</p>"
-    }}
-  ]
-}}
+    if allow_bold_text:
+        bold_rule = "Use bold <strong> tags sparingly for job titles and primary metrics where helpful."
+    else:
+        bold_rule = "DO NOT use any bold tags (<strong> or <b>) anywhere in contentHtml. Keep all text plain and unbolded as standard professional resumes avoid embedded bold tags."
 
-Formatting Guidelines:
-1. Divide the resume cleanly into distinct standard sections: Summary/Objective, Work Experience, Education, Projects, Skills, Certifications, Awards, etc.
-2. In `contentHtml`, format content using rich, clean, semantic HTML:
-   - Wrap job/degree/project titles in `<p><strong>Title / Degree</strong> — Company / School (Date)</p>`.
-   - Wrap hyperlinked text in clickable tags: `<a href="https://..." target="_blank" rel="noopener noreferrer">label or link</a>`.
-   - Use bold `<strong>` for tech stacks, skills, or key metrics: `<p><strong>Languages:</strong> Python, JavaScript...</p>`.
-   - Wrap bullet points in `<ul><li>Accomplishment with <strong>metric</strong></li></ul>`.
-   - Use separate `<p>` tags for distinct paragraphs or subsections.
-   - Do NOT omit any information from the extracted resume.
-3. Crucial Hyperlink Requirements:
-   - Inspect the 'DETECTED PDF HYPERLINKS & URIs' section below carefully.
-   - Attach these detected URLs to their corresponding anchors, project titles, demos, and profiles.
-   - In `header`, extract candidate name, contact info, and links accurately. Ensure `linkedin`, `github`, and `website` contain full URLs if detected.
-4. Ensure each section has a unique `id` (e.g. sec-1, sec-2) and incremental `order` (0, 1, 2...).
-5. Return JSON ONLY without markdown wrapping or conversational commentary.
-
-Extracted Resume Text:
-{extracted_text}
-"""
+    prompt = prompt_template.replace("{{BOLD_RULE}}", bold_rule)
+    prompt += f"\n\nExtracted Resume Text:\n{extracted_text}\n"
 
     candidate_models = [
         "models/gemini-3.5-flash",

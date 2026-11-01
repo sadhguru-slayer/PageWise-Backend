@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, List
 from pydantic import BaseModel, EmailStr, Field
 
 
@@ -20,10 +20,16 @@ class UserOut(BaseModel):
     id: int
     name: str
     email: str
+    preferences_json: Optional[Any] = {}
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class UserPreferencesUpdate(BaseModel):
+    name: Optional[str] = None
+    allow_bold_text: Optional[bool] = False
 
 
 class AuthResponse(BaseModel):
@@ -45,8 +51,17 @@ class ResumeCreate(ResumeBase):
     pass
 
 
-class ResumeUpdate(ResumeBase):
-    pass
+class ResumeUpdate(BaseModel):
+    name: Optional[str] = None
+    header_json: Optional[Any] = None
+    settings_json: Optional[Any] = None
+    sections_json: Optional[Any] = None
+    # Job targeting fields
+    target_job_title: Optional[str] = None
+    target_company: Optional[str] = None
+    target_job_description: Optional[str] = None
+    target_ats_score: Optional[float] = None
+    jd_analysis_json: Optional[Any] = {}
 
 
 class ResumeSummary(BaseModel):
@@ -56,6 +71,10 @@ class ResumeSummary(BaseModel):
     created_at: datetime
     updated_at: datetime
     section_count: Optional[int] = 0
+    # Job targeting
+    target_job_title: Optional[str] = None
+    target_company: Optional[str] = None
+    target_ats_score: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -70,6 +89,47 @@ class ResumeDetail(BaseModel):
     sections_json: Any
     created_at: datetime
     updated_at: datetime
+    # Job targeting
+    target_job_title: Optional[str] = None
+    target_company: Optional[str] = None
+    target_job_description: Optional[str] = None
+    target_ats_score: Optional[float] = None
+    jd_analysis_json: Optional[Any] = {}
+
+    class Config:
+        from_attributes = True
+
+
+# ─── Resume Clone Request ─────────────────────────────────────────────────────
+
+class ResumeCloneRequest(BaseModel):
+    new_name: Optional[str] = None
+    target_job_title: Optional[str] = None
+    target_company: Optional[str] = None
+    target_job_description: Optional[str] = None
+    target_ats_score: Optional[float] = None
+    jd_analysis_json: Optional[Any] = {}
+
+
+# ─── User Template Schemas ───────────────────────────────────────────────────
+
+class TemplateCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    settings_json: Any = {}
+    header_style_json: Any = {}
+    section_defaults_json: Any = {}
+
+
+class TemplateOut(BaseModel):
+    id: int
+    user_id: int
+    name: str
+    description: Optional[str] = None
+    settings_json: Any
+    header_style_json: Any
+    section_defaults_json: Any
+    created_at: datetime
 
     class Config:
         from_attributes = True
@@ -78,6 +138,18 @@ class ResumeDetail(BaseModel):
 # ─── Export Schemas ──────────────────────────────────────────────────────────
 
 class ExportPDFRequest(BaseModel):
+    resume_id: Optional[int] = None
+    name: str = "Resume"
+    html: str
+
+
+class ExportImageRequest(BaseModel):
+    resume_id: Optional[int] = None
+    name: str = "Resume"
+    html: str
+
+
+class ExportHTMLRequest(BaseModel):
     resume_id: Optional[int] = None
     name: str = "Resume"
     html: str
@@ -98,7 +170,30 @@ class ExportedResumeOut(BaseModel):
     file_type: str
     file_name: str
     file_size: int
+    target_job_title: Optional[str] = None
+    target_company: Optional[str] = None
+    template_name: Optional[str] = None
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+# ─── JD & ATS Analysis Schemas ───────────────────────────────────────────────
+
+class JDAnalyzeRequest(BaseModel):
+    resume_id: Optional[int] = None
+    job_description: str
+    current_resume_override: Optional[Any] = None
+    include_all_user_resumes: Optional[bool] = True
+
+
+# ─── Usage Stats Schema ───────────────────────────────────────────────────────
+
+class UsageStats(BaseModel):
+    resume_count: int = 0
+    template_count: int = 0
+    jd_analyses_count: int = 0
+    export_count: int = 0
+    targeted_resume_count: int = 0
+

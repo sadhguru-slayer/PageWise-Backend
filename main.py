@@ -7,6 +7,16 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+from dotenv import load_dotenv
+import os
+
+# Load environment configuration early at application entry
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.dirname(BASE_DIR)
+load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(ROOT_DIR, ".env"))
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -20,7 +30,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="Resumo API",
     description="Backend API for Resumo Resume Builder application",
-    version="2.0.0"
+    version="2.5.0"
 )
 
 # Configure CORS for Next.js frontend
@@ -44,6 +54,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(resumes.router)
 app.include_router(resumes.legacy_router)
+app.include_router(resumes.templates_router)
 app.include_router(exports.router)
 
 

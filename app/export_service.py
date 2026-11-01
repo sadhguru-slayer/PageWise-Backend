@@ -42,6 +42,29 @@ def _sync_render_pdf(html_content: str, file_path: str):
         f.write(pdf_bytes)
 
 
+def _sync_render_image(html_content: str, file_path: str):
+    """Renders high-resolution PNG image of the resume using Playwright."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+        page = browser.new_page(device_scale_factor=2)  # 2x Retina resolution
+        page.set_viewport_size({"width": 794, "height": 1123})
+        page.set_content(html_content, wait_until="networkidle")
+
+        try:
+            page.evaluate("() => document.fonts.ready")
+        except Exception:
+            pass
+
+        img_bytes = page.screenshot(full_page=True, type="png")
+        browser.close()
+
+    with open(file_path, "wb") as f:
+        f.write(img_bytes)
+
+
 async def generate_pdf_from_html(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
     """
     Renders the given HTML string using Playwright and saves it as a high-fidelity PDF.
@@ -53,6 +76,39 @@ async def generate_pdf_from_html(html_content: str, base_filename: str = "resume
     file_path = os.path.join(EXPORTS_DIR, file_name)
 
     await asyncio.to_thread(_sync_render_pdf, html_content, file_path)
+
+    file_size = os.path.getsize(file_path)
+    return file_path, file_name, file_size
+
+
+async def generate_image_from_html(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
+    """
+    Renders the given HTML string into a high-res PNG image.
+    Returns: (file_path, file_name, file_size)
+    """
+    safe_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', base_filename).strip() or "resume"
+    unique_id = uuid.uuid4().hex[:8]
+    file_name = f"{safe_name}_{unique_id}.png"
+    file_path = os.path.join(EXPORTS_DIR, file_name)
+
+    await asyncio.to_thread(_sync_render_image, html_content, file_path)
+
+    file_size = os.path.getsize(file_path)
+    return file_path, file_name, file_size
+
+
+async def generate_html_file(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
+    """
+    Saves standalone clean HTML export.
+    Returns: (file_path, file_name, file_size)
+    """
+    safe_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', base_filename).strip() or "resume"
+    unique_id = uuid.uuid4().hex[:8]
+    file_name = f"{safe_name}_{unique_id}.html"
+    file_path = os.path.join(EXPORTS_DIR, file_name)
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
 
     file_size = os.path.getsize(file_path)
     return file_path, file_name, file_size
