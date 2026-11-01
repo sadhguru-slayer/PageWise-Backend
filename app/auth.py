@@ -40,6 +40,40 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     return encoded_jwt
 
 
+def create_reset_token(email: str, user_id: int, scope: str = "password_reset", expires_minutes: int = 15) -> str:
+    """Create a short-lived token for password reset with a specific scope."""
+    expire = datetime.utcnow() + timedelta(minutes=expires_minutes)
+    payload = {
+        "sub": str(user_id),
+        "email": email.lower().strip(),
+        "scope": scope,
+        "exp": expire,
+    }
+    return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_reset_token(token: str, expected_scope: str = "password_reset") -> dict:
+    """Verify and decode a scoped password reset token."""
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("scope") != expected_scope:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Invalid token scope for this operation."
+            )
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Reset token has expired. Please request a new verification code."
+        )
+    except (jwt.PyJWTError, Exception):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or malformed reset token."
+        )
+
+
 def get_user_from_token(token: str, db: Session) -> Optional[User]:
     """Helper to decode and validate a JWT token string directly (header or query param)."""
     try:

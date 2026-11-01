@@ -1,0 +1,123 @@
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chat-application
+
+    # Only accessible from the OCI VM itself.
+    # Caddy handles public HTTP/HTTPS traffic.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_started
+
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    command: >
+      uvicorn app.main:app
+      --host 0.0.0.0
+      --port 8000
+
+    mem_limit: 512m
+    mem_reservation: 256m
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Run migrations manually during deployment:
+  #
+  # docker compose run --rm alembic alembic upgrade head
+  #
+  alembic:
+    profiles:
+      - migration
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chat-application-alembic
+
+    depends_on:
+      postgres:
+        condition: service_started
+
+    env_file:
+      - .env
+
+    command: alembic upgrade head
+
+    restart: "no"
+
+    mem_limit: 256m
+    mem_reservation: 128m
+
+  redis:
+    image: redis:7-alpine
+    container_name: chat-application-redis
+
+    restart: unless-stopped
+
+    command: >
+      redis-server
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+
+    mem_limit: 128m
+    mem_reservation: 64m
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: chat-application-postgres
+
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: chatuser
+      POSTGRES_PASSWORD: chatpassword
+      POSTGRES_DB: chatdb
+
+    # PostgreSQL does NOT need to be publicly accessible.
+    # Remove this if your application is the only client.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    mem_limit: 512m
+    mem_reservation: 256m
+
+  # Reverse proxy + HTTPS
+  caddy:
+    image: caddy:2-alpine
+    container_name: fieldchat-caddy
+
+    restart: unless-stopped
+
+    ports:
+      - "80:80"
+      - "443:443"
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+    depends_on:
+      - fastapi
+
+    mem_limit: 128m
+    mem_reservation: 64m
+
+volumes:
+  postgres_data:
+  caddy_data:
+  caddy_config:

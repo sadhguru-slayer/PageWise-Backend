@@ -49,6 +49,38 @@ class AuthResponse(BaseModel):
     user: UserOut
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyResetOTPRequest(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=4, max_length=10)
+
+
+class ResetPasswordRequest(BaseModel):
+    reset_token: str
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+class ProfileVerifyResetOTPRequest(BaseModel):
+    otp: str = Field(..., min_length=4, max_length=10)
+
+
+class ProfileResetPasswordRequest(BaseModel):
+    reset_token: str
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+
+class ResetTokenResponse(BaseModel):
+    reset_token: str
+    message: str = "OTP verified successfully"
+
+
 # ─── Resume Schemas ──────────────────────────────────────────────────────────
 
 class ResumeBase(BaseModel):
@@ -207,4 +239,3 @@ class UsageStats(BaseModel):
     jd_analyses_count: int = 0
     export_count: int = 0
     targeted_resume_count: int = 0
-
