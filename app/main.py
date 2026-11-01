@@ -8,7 +8,14 @@ if sys.platform == "win32":
         pass
 
 import os
+import logging
 from dotenv import load_dotenv
+
+# Initialize logging so stdout captures info logs
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 # Load environment configuration
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
