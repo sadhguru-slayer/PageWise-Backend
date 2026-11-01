@@ -1,13 +1,3 @@
-{
-    # Global options
-}
-
-# Public HTTP / HTTPS reverse proxy for PageWise Studio FastAPI backend
-:80 {
-    reverse_proxy fastapi:8000 {
-        header_up Host {host}
-        header_up X-Real-IP {remote_host}
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-    }
+pagewise-api.sadguruchenu.in {
+    reverse_proxy fastapi:8000
 }

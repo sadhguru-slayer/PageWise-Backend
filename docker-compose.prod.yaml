@@ -3,35 +3,121 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: pagewise-api
-
-    # Internal port on host. Caddy proxies public traffic.
-    ports:
-      - "127.0.0.1:8000:8000"
-
-    depends_on:
-      redis:
-        condition: service_started
-      postgres:
-        condition: service_started
-
+    container_name: resumo-api
     restart: unless-stopped
-
     env_file:
       - .env
-
+    environment:
+      # Sensible container defaults (overridden by any values defined in .env)
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-resumouser}:${POSTGRES_PASSWORD:-resumopassword}@postgres:5432/${POSTGRES_DB:-resumodb}}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - PORT=8000
+    ports:
+      # Exposed on VM localhost for health checks/debugging. Caddy proxies public traffic.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # Persist user-generated PDF & DOCX resumes across container recreations
+      - ./exports:/app/exports
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     command: >
       uvicorn app.main:app
       --host 0.0.0.0
       --port 8000
+      --workers 2
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/api/health\")'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    mem_limit: 1024m
+    mem_reservation: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: resumo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-resumouser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-resumopassword}
+      POSTGRES_DB: ${POSTGRES_DB:-resumodb}
+    ports:
+      # Bound to localhost only (for administrative psql or maintenance from the host)
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - resumo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-resumouser} -d ${POSTGRES_DB:-resumodb}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     mem_limit: 512m
     mem_reservation: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+  redis:
+    image: redis:7-alpine
+    container_name: resumo-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+    ports:
+      # Bound to localhost only for debugging
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    mem_limit: 128m
+    mem_reservation: 64m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  # Run migrations manually during deployment:
+  # Reverse proxy + Automatic SSL (Production)
+  caddy:
+    image: caddy:2-alpine
+    container_name: resumo-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - resumo_caddy_data:/data
+      - resumo_caddy_config:/config
+    depends_on:
+      - fastapi
+    mem_limit: 128m
+    mem_reservation: 64m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Run Alembic migrations manually during deployment if needed:
   # docker compose -f docker-compose.prod.yaml --profile migration run --rm alembic
   alembic:
     profiles:
@@ -39,80 +125,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: pagewise-alembic
-
+    container_name: resumo-alembic
     depends_on:
       postgres:
-        condition: service_started
-
+        condition: service_healthy
     env_file:
       - .env
-
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg2://${POSTGRES_USER:-resumouser}:${POSTGRES_PASSWORD:-resumopassword}@postgres:5432/${POSTGRES_DB:-resumodb}}
     command: alembic upgrade head
-
     restart: "no"
-
     mem_limit: 256m
     mem_reservation: 128m
 
-  redis:
-    image: redis:7-alpine
-    container_name: pagewise-redis
-
-    restart: unless-stopped
-
-    command: >
-      redis-server
-      --maxmemory 64mb
-      --maxmemory-policy allkeys-lru
-      --save ""
-
-    mem_limit: 128m
-    mem_reservation: 64m
-
-  postgres:
-    image: postgres:16-alpine
-    container_name: pagewise-postgres
-
-    restart: unless-stopped
-
-    environment:
-      POSTGRES_USER: pagewiseuser
-      POSTGRES_PASSWORD: pagewisepassword
-      POSTGRES_DB: pagewisedb
-
-    ports:
-      - "127.0.0.1:5432:5432"
-
-    volumes:
-      - pagewise_postgres_data:/var/lib/postgresql/data
-
-    mem_limit: 512m
-    mem_reservation: 256m
-
-  # Reverse proxy + Automatic SSL (Production only)
-  caddy:
-    image: caddy:2-alpine
-    container_name: pagewise-caddy
-
-    restart: unless-stopped
-
-    ports:
-      - "80:80"
-      - "443:443"
-
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - pagewise_caddy_data:/data
-      - pagewise_caddy_config:/config
-
-    depends_on:
-      - fastapi
-
-    mem_limit: 128m
-    mem_reservation: 64m
-
 volumes:
-  pagewise_postgres_data:
-  pagewise_caddy_data:
-  pagewise_caddy_config:
+  resumo_postgres_data:
+  resumo_caddy_data:
+  resumo_caddy_config:
