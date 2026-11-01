@@ -1,14 +1,20 @@
 FROM python:3.12-slim-bookworm
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+# Prevent Python from writing pyc files
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Prevent Python from buffering stdout/stderr
+ENV PYTHONUNBUFFERED=1
+
+ENV PIP_DEFAULT_TIMEOUT=1000
+ENV PIP_RETRIES=10
 
 WORKDIR /app
 
-# Copy pre-downloaded wheels and requirements, then install offline (no PyPI network calls)
+# Install Python dependencies
 COPY requirements.txt .
-COPY wheels/ /wheels/
-RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt
+
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY . .
