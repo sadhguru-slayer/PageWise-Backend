@@ -1,17 +1,16 @@
+
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.12-slim-bookworm
 
-# Prevent Python from writing pyc files
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Prevent Python from buffering stdout/stderr
-ENV PYTHONUNBUFFERED=1
-
-ENV PIP_DEFAULT_TIMEOUT=1000
-ENV PIP_RETRIES=10
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DEFAULT_TIMEOUT=1000 \
+    PIP_RETRIES=10
 
 WORKDIR /app
 
-# Install system dependencies for WeasyPrint (lightweight pango/cairo, no heavy browser)
+# System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango-1.0-0 \
     libpangoft2-1.0-0 \
@@ -21,20 +20,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenjp2-7 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies: uses pre-downloaded wheels if present in ./wheels, otherwise falls back to PyPI
+# STEP 1: Copy ONLY dependency definitions
 COPY requirements.txt .
-COPY . /tmp/build_context/
 
-RUN if [ -d "/tmp/build_context/wheels" ] && [ "$(ls -A /tmp/build_context/wheels 2>/dev/null)" ]; then \
-        echo "--> Installing dependencies from local wheels directory..." && \
-        pip install --no-cache-dir --no-index --find-links=/tmp/build_context/wheels -r requirements.txt; \
-    else \
-        echo "--> Local wheels not found, installing dependencies normally from PyPI..." && \
-        pip install --no-cache-dir -r requirements.txt; \
-    fi && \
-    rm -rf /tmp/build_context
+# STEP 2: Install dependencies with persistent BuildKit cache
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
-# Copy application
+# STEP 3: Copy application AFTER dependencies
 COPY . .
 
 EXPOSE 8000
