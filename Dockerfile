@@ -6,15 +6,19 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Prevent Python from buffering stdout/stderr
 ENV PYTHONUNBUFFERED=1
 
-ENV PIP_DEFAULT_TIMEOUT=120
-ENV PIP_RETRIES=5
+ENV PIP_DEFAULT_TIMEOUT=1000
+ENV PIP_RETRIES=10
 
 WORKDIR /app
 
-# Install Python dependencies (all wheels, no gcc/apt-get required)
+# Install Python dependencies with high timeout and retries
 COPY requirements.txt .
 
-RUN pip install -v --no-cache-dir -r requirements.txt
+RUN pip install \
+    --no-cache-dir \
+    --default-timeout=1000 \
+    --retries=10 \
+    -r requirements.txt
 
 # Install Playwright Chromium browser
 RUN python -m playwright install chromium
