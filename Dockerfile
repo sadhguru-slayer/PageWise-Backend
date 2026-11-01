@@ -8,20 +8,18 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies
+# Install minimal system utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Install Python dependencies using pre-compiled binary wheels
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browser dependencies and chromium headless for PDF export
+# Install Playwright browser dependencies and chromium headless for PDF export (optional in dev)
 RUN python -m playwright install --with-deps chromium || true
 
 # Copy application source code

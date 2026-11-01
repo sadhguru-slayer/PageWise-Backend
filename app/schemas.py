@@ -10,6 +10,7 @@ class UserRegister(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=128)
+    register_token: Optional[str] = None
 
 
 class UserLogin(BaseModel):
@@ -47,6 +48,31 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserOut
+
+
+# ─── OTP Schemas (Register, Login, Password Reset) ───────────────────────────
+
+class RegisterOTPRequest(BaseModel):
+    email: EmailStr
+
+
+class RegisterOTPVerify(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=4, max_length=10)
+
+
+class RegisterTokenResponse(BaseModel):
+    register_token: str
+    message: str = "Email verified successfully"
+
+
+class LoginOTPRequest(BaseModel):
+    email: EmailStr
+
+
+class LoginOTPVerify(BaseModel):
+    email: EmailStr
+    otp: str = Field(..., min_length=4, max_length=10)
 
 
 class ForgotPasswordRequest(BaseModel):

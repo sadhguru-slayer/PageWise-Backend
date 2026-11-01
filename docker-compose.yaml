@@ -5,10 +5,8 @@ services:
       dockerfile: Dockerfile
     container_name: pagewise-api
 
-    # Only accessible from the OCI VM itself.
-    # Caddy handles public HTTP/HTTPS traffic.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
 
     depends_on:
       redis:
@@ -18,13 +16,13 @@ services:
 
     restart: unless-stopped
 
+    volumes:
+      - .:/app
+
     env_file:
       - .env
 
-    command: >
-      uvicorn app.main:app
-      --host 0.0.0.0
-      --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app
 
     mem_limit: 512m
     mem_reservation: 256m
@@ -32,10 +30,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
-  # Run migrations manually during deployment:
-  #
-  # docker compose run --rm alembic alembic upgrade head
-  #
+  # Run migrations manually on demand:
+  # docker compose --profile migration run --rm alembic
   alembic:
     profiles:
       - migration
@@ -47,6 +43,9 @@ services:
     depends_on:
       postgres:
         condition: service_started
+
+    volumes:
+      - .:/app
 
     env_file:
       - .env
@@ -63,6 +62,9 @@ services:
     container_name: pagewise-redis
 
     restart: unless-stopped
+
+    ports:
+      - "6379:6379"
 
     command: >
       redis-server
@@ -84,10 +86,8 @@ services:
       POSTGRES_PASSWORD: pagewisepassword
       POSTGRES_DB: pagewisedb
 
-    # PostgreSQL does NOT need to be publicly accessible.
-    # Remove this if your application is the only client.
     ports:
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
 
     volumes:
       - pagewise_postgres_data:/var/lib/postgresql/data
@@ -95,29 +95,5 @@ services:
     mem_limit: 512m
     mem_reservation: 256m
 
-  # Reverse proxy + HTTPS
-  caddy:
-    image: caddy:2-alpine
-    container_name: pagewise-caddy
-
-    restart: unless-stopped
-
-    ports:
-      - "80:80"
-      - "443:443"
-
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - pagewise_caddy_data:/data
-      - pagewise_caddy_config:/config
-
-    depends_on:
-      - fastapi
-
-    mem_limit: 128m
-    mem_reservation: 64m
-
 volumes:
   pagewise_postgres_data:
-  pagewise_caddy_data:
-  pagewise_caddy_config:

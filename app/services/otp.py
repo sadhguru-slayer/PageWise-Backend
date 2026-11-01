@@ -6,6 +6,8 @@ from app.redis_client import redis_client
 class OTPPurpose(str, Enum):
     PASSWORD_RESET = "password_reset"
     PROFILE_PASSWORD_RESET = "profile_password_reset"
+    LOGIN = "login"
+    REGISTER = "register"
 
 
 class OTPService:

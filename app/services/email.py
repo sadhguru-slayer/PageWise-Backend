@@ -21,7 +21,13 @@ _PREVIEW_DIR = pathlib.Path(__file__).resolve().parent.parent.parent / "email_pr
 
 
 def _build_otp_email_html(otp_code: str, purpose: OTPPurpose) -> tuple[str, str, str]:
-    if purpose == OTPPurpose.PROFILE_PASSWORD_RESET:
+    if purpose == OTPPurpose.REGISTER:
+        title = "Verify Your Email Address"
+        subtitle = "Use the verification code below to complete your PageWise Studio registration and activate your account."
+    elif purpose == OTPPurpose.LOGIN:
+        title = "Your One-Time Login Code"
+        subtitle = "Use the code below to log in to your PageWise Studio workspace. No password required."
+    elif purpose == OTPPurpose.PROFILE_PASSWORD_RESET:
         title = "Profile Password Reset Verification"
         subtitle = "A request was made to update your studio password from inside your profile."
     else:
@@ -65,7 +71,7 @@ def _build_otp_email_html(otp_code: str, purpose: OTPPurpose) -> tuple[str, str,
         </div>
         <div class="warning">
           &#9201; <strong>Code expires in 10 minutes.</strong><br/>
-          &#128274; If you did not initiate this request, please change your password or ignore this message.
+          &#128274; If you did not initiate this request, please disregard this email.
         </div>
       </div>
       <div class="footer">
