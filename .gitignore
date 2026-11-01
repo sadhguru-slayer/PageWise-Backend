@@ -38,3 +38,6 @@ htmlcov/
 Thumbs.db
 
 email_previews/
+
+# Pre-downloaded pip wheels (generated via: docker run --rm -v ${PWD}:/app -w /app python:3.12-slim-bookworm pip download -d wheels -r requirements.txt)
+wheels/

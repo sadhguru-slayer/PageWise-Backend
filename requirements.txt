@@ -17,6 +17,7 @@ pydantic
 beautifulsoup4
 python-docx
 PyMuPDF
+weasyprint
 
 google-genai
 

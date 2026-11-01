@@ -1,13 +1,14 @@
 import json
+from datetime import datetime
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Resume, User, ResumeTemplate, ExportedResume
+from ..models import Resume, User, ResumeTemplate, ExportedResume, AIUsageLog
 from ..schemas import (
     ResumeCreate, ResumeUpdate, ResumeSummary, ResumeDetail,
-    JDAnalyzeRequest, ResumeCloneRequest,
+    JDAnalyzeRequest, ATSAnalyzeRequest, ResumeCloneRequest,
     TemplateCreate, TemplateOut, UsageStats
 )
 from ..auth import get_current_user
@@ -41,10 +42,10 @@ def list_resumes(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lists all resumes belonging strictly to the currently authenticated user."""
+    """Lists all active resumes belonging strictly to the currently authenticated user."""
     resumes = (
         db.query(Resume)
-        .filter(Resume.user_id == current_user.id)
+        .filter(Resume.user_id == current_user.id, Resume.is_deleted == False)
         .order_by(Resume.updated_at.desc())
         .all()
     )
@@ -108,7 +109,7 @@ def get_resume(
     """Retrieves a single resume by ID, ensuring user ownership."""
     resume = (
         db.query(Resume)
-        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
         .first()
     )
     if not resume:
@@ -141,7 +142,7 @@ def update_resume(
     """Updates an existing resume, ensuring user ownership."""
     resume = (
         db.query(Resume)
-        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
         .first()
     )
     if not resume:
@@ -191,16 +192,17 @@ def delete_resume(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Deletes a resume by ID, ensuring user ownership."""
+    """Soft-deletes a resume by ID, preserving resource quota history."""
     resume = (
         db.query(Resume)
-        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
         .first()
     )
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found or access denied")
 
-    db.delete(resume)
+    resume.is_deleted = True
+    resume.deleted_at = datetime.utcnow()
     db.commit()
     return {"message": "Resume deleted successfully", "id": resume_id}
 
@@ -381,7 +383,7 @@ def analyze_job_description(
 
         # Automatically store summarized JD & ATS analysis in the target resume if resume_id is provided
         if payload.resume_id:
-            res_to_update = db.query(Resume).filter(Resume.id == payload.resume_id, Resume.user_id == current_user.id).first()
+            res_to_update = db.query(Resume).filter(Resume.id == payload.resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False).first()
             if res_to_update:
                 job_an = analysis_result.get("job_analysis", {})
                 ats_ck = analysis_result.get("ats_check", {})
@@ -395,6 +397,25 @@ def analyze_job_description(
                 res_to_update.jd_analysis_json = json.dumps(analysis_result)
                 db.commit()
 
+        # Record Wiser AI Usage Log (Job Help)
+        ai_model_name = analysis_result.pop("_ai_model", "gemini-flash")
+        job_an = analysis_result.get("job_analysis", {})
+        ats_ck = analysis_result.get("ats_check", {})
+        meta = {
+            "job_title": job_an.get("title"),
+            "company": job_an.get("company"),
+            "ats_score": ats_ck.get("overall_score"),
+        }
+        log_entry = AIUsageLog(
+            user_id=current_user.id,
+            resume_id=payload.resume_id,
+            action_type="wiser_job_help",
+            ai_model=ai_model_name,
+            meta_json=json.dumps(meta),
+        )
+        db.add(log_entry)
+        db.commit()
+
         return {
             "success": True,
             "data": analysis_result
@@ -405,6 +426,105 @@ def analyze_job_description(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"JD & ATS analysis failed: {str(ge)}")
+
+
+@router.post("/analyze-ats")
+def analyze_standalone_resume_ats(
+    payload: ATSAnalyzeRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Performs standalone 'Wiser ATS' audit on a resume without requiring a Job Description.
+    Audits keyword positioning, action verbs, quantified impact, and structural parseability.
+    """
+    from ..jd_analyzer import analyze_standalone_ats
+
+    # 1. Fetch current resume
+    current_resume_dict = None
+    if payload.current_resume_override and isinstance(payload.current_resume_override, dict):
+        current_resume_dict = payload.current_resume_override
+    elif payload.resume_id:
+        target_resume = (
+            db.query(Resume)
+            .filter(Resume.id == payload.resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
+            .first()
+        )
+        if target_resume:
+            current_resume_dict = {
+                "id": target_resume.id,
+                "name": target_resume.name,
+                "header_json": parse_json_field(target_resume.header_json, {}),
+                "settings_json": parse_json_field(target_resume.settings_json, {}),
+                "sections_json": parse_json_field(target_resume.sections_json, []),
+            }
+
+    if not current_resume_dict:
+        latest_resume = (
+            db.query(Resume)
+            .filter(Resume.user_id == current_user.id, Resume.is_deleted == False)
+            .order_by(Resume.updated_at.desc())
+            .first()
+        )
+        if latest_resume:
+            current_resume_dict = {
+                "id": latest_resume.id,
+                "name": latest_resume.name,
+                "header_json": parse_json_field(latest_resume.header_json, {}),
+                "settings_json": parse_json_field(latest_resume.settings_json, {}),
+                "sections_json": parse_json_field(latest_resume.sections_json, []),
+            }
+        else:
+            current_resume_dict = {"header_json": {}, "sections_json": []}
+
+    try:
+        user_prefs = parse_json_field(current_user.preferences_json, {})
+        allow_bold = bool(user_prefs.get("allow_bold_text", False))
+        analysis_result = analyze_standalone_ats(
+            current_resume=current_resume_dict,
+            allow_bold_text=allow_bold
+        )
+
+        ai_model_name = analysis_result.pop("_ai_model", "gemini-flash")
+        ats_ck = analysis_result.get("ats_check", {})
+        inferred = analysis_result.get("inferred_domain", {})
+
+        # If resume_id provided, update target_ats_score on the resume
+        if payload.resume_id:
+            res_to_update = db.query(Resume).filter(
+                Resume.id == payload.resume_id,
+                Resume.user_id == current_user.id,
+                Resume.is_deleted == False
+            ).first()
+            if res_to_update and ats_ck.get("overall_score") is not None:
+                res_to_update.target_ats_score = ats_ck.get("overall_score")
+                db.commit()
+
+        # Log AI action for Wiser usage tracking
+        meta = {
+            "inferred_domain": inferred.get("title"),
+            "ats_score": ats_ck.get("overall_score"),
+        }
+        log_entry = AIUsageLog(
+            user_id=current_user.id,
+            resume_id=payload.resume_id,
+            action_type="wiser_ats_check",
+            ai_model=ai_model_name,
+            meta_json=json.dumps(meta),
+        )
+        db.add(log_entry)
+        db.commit()
+
+        return {
+            "success": True,
+            "data": analysis_result
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as ge:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Wiser ATS analysis failed: {str(ge)}")
 
 
 
@@ -423,7 +543,7 @@ def clone_resume(
     """
     source = (
         db.query(Resume)
-        .filter(Resume.id == resume_id, Resume.user_id == current_user.id)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
         .first()
     )
     if not source:
@@ -482,10 +602,10 @@ def list_templates(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lists all user-saved style templates."""
+    """Lists all active user-saved style templates (excluding soft-deleted)."""
     return (
         db.query(ResumeTemplate)
-        .filter(ResumeTemplate.user_id == current_user.id)
+        .filter(ResumeTemplate.user_id == current_user.id, ResumeTemplate.is_deleted == False)
         .order_by(ResumeTemplate.created_at.desc())
         .all()
     )
@@ -528,15 +648,16 @@ def delete_template(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Deletes a user-saved template."""
+    """Soft-deletes a user-saved template, keeping lifetime usage counts."""
     tmpl = (
         db.query(ResumeTemplate)
-        .filter(ResumeTemplate.id == template_id, ResumeTemplate.user_id == current_user.id)
+        .filter(ResumeTemplate.id == template_id, ResumeTemplate.user_id == current_user.id, ResumeTemplate.is_deleted == False)
         .first()
     )
     if not tmpl:
         raise HTTPException(status_code=404, detail="Template not found")
-    db.delete(tmpl)
+    tmpl.is_deleted = True
+    tmpl.deleted_at = datetime.utcnow()
     db.commit()
     return {"message": "Template deleted", "id": template_id}
 
@@ -548,21 +669,44 @@ def get_usage_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Returns aggregated usage statistics for the authenticated user."""
-    resume_count = db.query(Resume).filter(Resume.user_id == current_user.id).count()
-    template_count = db.query(ResumeTemplate).filter(ResumeTemplate.user_id == current_user.id).count()
-    export_count = db.query(ExportedResume).filter(ExportedResume.user_id == current_user.id).count()
+    """Returns aggregated usage statistics and Wiser AI metrics for the authenticated user."""
+    # Active resources currently in workspace
+    active_resumes = db.query(Resume).filter(Resume.user_id == current_user.id, Resume.is_deleted == False).count()
+    active_templates = db.query(ResumeTemplate).filter(ResumeTemplate.user_id == current_user.id, ResumeTemplate.is_deleted == False).count()
+    active_exports = db.query(ExportedResume).filter(ExportedResume.user_id == current_user.id, ExportedResume.is_deleted == False).count()
     targeted_count = (
         db.query(Resume)
-        .filter(Resume.user_id == current_user.id, Resume.target_job_title.isnot(None))
+        .filter(Resume.user_id == current_user.id, Resume.is_deleted == False, Resume.target_job_title.isnot(None))
         .count()
     )
+
+    # Lifetime total resources created (including soft-deleted)
+    total_resumes = db.query(Resume).filter(Resume.user_id == current_user.id).count()
+    total_templates = db.query(ResumeTemplate).filter(ResumeTemplate.user_id == current_user.id).count()
+    total_exports = db.query(ExportedResume).filter(ExportedResume.user_id == current_user.id).count()
+
+    # Wiser AI layer metrics (subscriptions & quota enforcement)
+    wiser_job_helps = db.query(AIUsageLog).filter(AIUsageLog.user_id == current_user.id, AIUsageLog.action_type == "wiser_job_help").count()
+    wiser_ats_checks = db.query(AIUsageLog).filter(AIUsageLog.user_id == current_user.id, AIUsageLog.action_type == "wiser_ats_check").count()
+    wiser_total = db.query(AIUsageLog).filter(AIUsageLog.user_id == current_user.id).count()
+
+    # Graceful fallback for historical accounts created before AIUsageLog table
+    if wiser_job_helps == 0 and targeted_count > 0:
+        wiser_job_helps = targeted_count
+        wiser_total = targeted_count
+
     return UsageStats(
-        resume_count=resume_count,
-        template_count=template_count,
-        jd_analyses_count=targeted_count,   # proxy: each targeted resume = 1 JD analysis
-        export_count=export_count,
+        resume_count=active_resumes,
+        total_resumes_generated=total_resumes,
+        template_count=active_templates,
+        total_templates_created=total_templates,
+        export_count=active_exports,
+        total_exports_generated=total_exports,
         targeted_resume_count=targeted_count,
+        jd_analyses_count=wiser_job_helps,
+        wiser_job_helps_count=wiser_job_helps,
+        wiser_ats_checks_count=wiser_ats_checks,
+        wiser_total_invocations=wiser_total,
     )
 
 

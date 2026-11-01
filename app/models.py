@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Text, DateTime, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, Float, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from .database import Base
 
@@ -19,6 +19,7 @@ class User(Base):
     resumes = relationship("Resume", back_populates="owner", cascade="all, delete-orphan")
     exports = relationship("ExportedResume", back_populates="user", cascade="all, delete-orphan")
     templates = relationship("ResumeTemplate", back_populates="owner", cascade="all, delete-orphan")
+    ai_logs = relationship("AIUsageLog", back_populates="user", cascade="all, delete-orphan")
 
 
 class Resume(Base):
@@ -40,12 +41,17 @@ class Resume(Base):
     target_ats_score = Column(Float, nullable=True)
     jd_analysis_json = Column(Text, default="{}")
 
+    # ─── Soft Deletion & Audit ────────────────────────────────────────────────
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     # Relationships
     owner = relationship("User", back_populates="resumes")
     exports = relationship("ExportedResume", back_populates="resume", cascade="all, delete-orphan")
+    ai_logs = relationship("AIUsageLog", back_populates="resume")
 
 
 class ResumeTemplate(Base):
@@ -61,6 +67,10 @@ class ResumeTemplate(Base):
     settings_json = Column(Text, default="{}")       # page settings (margins, fonts, sizes)
     header_style_json = Column(Text, default="{}")   # header style (alignment, fonts, divider)
     section_defaults_json = Column(Text, default="{}") # section heading defaults
+
+    # ─── Soft Deletion & Audit ────────────────────────────────────────────────
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(DateTime, nullable=True)
 
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -84,9 +94,35 @@ class ExportedResume(Base):
     target_company = Column(String(255), nullable=True)
     template_name = Column(String(255), nullable=True)
 
+    # ─── Soft Deletion & Audit ────────────────────────────────────────────────
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+    deleted_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Relationships
     user = relationship("User", back_populates="exports")
     resume = relationship("Resume", back_populates="exports")
 
+
+class AIUsageLog(Base):
+    """
+    Audit log of Wiser AI invocations for quota enforcement,
+    usage analytics, and subscription model tiers.
+    """
+    __tablename__ = "ai_usage_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    action_type = Column(String(50), nullable=False, index=True)  # "wiser_job_help", "wiser_ats_check", "wiser_pdf_import"
+    ai_model = Column(String(100), nullable=True)
+    tokens_used = Column(Integer, default=0)
+    meta_json = Column(Text, default="{}")
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # Relationships
+    user = relationship("User", back_populates="ai_logs")
+    resume = relationship("Resume", back_populates="ai_logs")

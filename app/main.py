@@ -20,12 +20,13 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import engine, Base
+from app.database import engine, Base, run_auto_migrations
 from app.routers import auth, resumes, exports
 
 # Initialize database tables automatically if not already present
 try:
     Base.metadata.create_all(bind=engine)
+    run_auto_migrations()
 except Exception:
     pass
 

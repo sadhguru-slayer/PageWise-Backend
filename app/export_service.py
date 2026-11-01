@@ -14,21 +14,24 @@ from .config import EXPORTS_DIR
 
 
 # ---------------------------------------------------------------------------
-# PDF Generation — PyMuPDF (fitz)
-# Lightweight, 0 GUI libs, ~20 MB RAM, generates PDFs in milliseconds.
-# Accepts the HTML content rendered from the resume builder.
+# PDF Generation — WeasyPrint (with PyMuPDF fallback)
+# WeasyPrint renders exact CSS, typography, and active clickable hyperlinks
+# with a tiny footprint (~30 MB RAM, 0 browser/GUI dependencies).
 # ---------------------------------------------------------------------------
+
+def _sync_render_pdf_weasyprint(html_content: str, file_path: str):
+    import weasyprint
+    weasyprint.HTML(string=html_content).write_pdf(file_path)
+
 
 def _sync_render_pdf_pymupdf(html_content: str, file_path: str):
     """
-    Converts HTML resume content to a PDF using PyMuPDF's Story engine.
-    No browser required. Runs entirely in-process, ~20 MB RAM.
+    Fallback: Converts HTML resume content to a PDF using PyMuPDF's Story engine.
     """
     story = fitz.Story(html=html_content)
 
     # A4 page: 595 x 842 points (1 pt = 1/72 inch)
     mediabox = fitz.Rect(0, 0, 595, 842)
-    # Zero margins — the HTML template controls its own padding/margins
     where = fitz.Rect(0, 0, 595, 842)
 
     writer = fitz.DocumentWriter(file_path)
@@ -43,9 +46,21 @@ def _sync_render_pdf_pymupdf(html_content: str, file_path: str):
     writer.close()
 
 
+def _sync_render_pdf(html_content: str, file_path: str):
+    """
+    Primary renderer: uses WeasyPrint for pixel-accurate layout and clickable links.
+    Falls back to PyMuPDF if WeasyPrint is unavailable.
+    """
+    try:
+        _sync_render_pdf_weasyprint(html_content, file_path)
+    except Exception as e:
+        print(f"WeasyPrint rendering failed ({e}), falling back to PyMuPDF.")
+        _sync_render_pdf_pymupdf(html_content, file_path)
+
+
 async def generate_pdf_from_html(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
     """
-    Generates a PDF from HTML resume content using PyMuPDF (no browser required).
+    Generates a PDF from HTML resume content using WeasyPrint.
     Returns: (file_path, file_name, file_size)
     """
     safe_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', base_filename).strip() or "resume"
@@ -53,22 +68,22 @@ async def generate_pdf_from_html(html_content: str, base_filename: str = "resume
     file_name = f"{safe_name}_{unique_id}.pdf"
     file_path = os.path.join(EXPORTS_DIR, file_name)
 
-    await asyncio.to_thread(_sync_render_pdf_pymupdf, html_content, file_path)
+    await asyncio.to_thread(_sync_render_pdf, html_content, file_path)
 
     file_size = os.path.getsize(file_path)
     return file_path, file_name, file_size
 
 
-def _sync_render_image_pymupdf(html_content: str, file_path: str):
+def _sync_render_image(html_content: str, file_path: str):
     """
-    Renders the first page of HTML content into a PNG image via PyMuPDF.
+    Renders high-res PNG image from the high-fidelity PDF rendered via WeasyPrint.
     """
     temp_pdf = file_path + ".tmp.pdf"
     try:
-        _sync_render_pdf_pymupdf(html_content, temp_pdf)
+        _sync_render_pdf(html_content, temp_pdf)
         doc = fitz.open(temp_pdf)
         if len(doc) > 0:
-            pix = doc[0].get_pixmap(dpi=150)
+            pix = doc[0].get_pixmap(dpi=200)
             pix.save(file_path)
         doc.close()
     finally:
@@ -81,7 +96,7 @@ def _sync_render_image_pymupdf(html_content: str, file_path: str):
 
 async def generate_image_from_html(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
     """
-    Renders high-res PNG image from HTML content using PyMuPDF (no browser required).
+    Renders high-res PNG image from HTML content.
     Returns: (file_path, file_name, file_size)
     """
     safe_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', base_filename).strip() or "resume"
@@ -89,7 +104,7 @@ async def generate_image_from_html(html_content: str, base_filename: str = "resu
     file_name = f"{safe_name}_{unique_id}.png"
     file_path = os.path.join(EXPORTS_DIR, file_name)
 
-    await asyncio.to_thread(_sync_render_image_pymupdf, html_content, file_path)
+    await asyncio.to_thread(_sync_render_image, html_content, file_path)
 
     file_size = os.path.getsize(file_path)
     return file_path, file_name, file_size

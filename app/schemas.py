@@ -257,11 +257,28 @@ class JDAnalyzeRequest(BaseModel):
     include_all_user_resumes: Optional[bool] = True
 
 
+class ATSAnalyzeRequest(BaseModel):
+    """Request payload for standalone Wiser ATS audit (no JD required)."""
+    resume_id: Optional[int] = None
+    current_resume_override: Optional[Any] = None
+
+
 # ─── Usage Stats Schema ───────────────────────────────────────────────────────
 
 class UsageStats(BaseModel):
+    # Active resources currently in workspace
     resume_count: int = 0
     template_count: int = 0
-    jd_analyses_count: int = 0
     export_count: int = 0
     targeted_resume_count: int = 0
+
+    # Lifetime total resources created (including soft-deleted)
+    total_resumes_generated: int = 0
+    total_templates_created: int = 0
+    total_exports_generated: int = 0
+
+    # Wiser AI Layer metrics (subscriptions & quota enforcement)
+    jd_analyses_count: int = 0          # Alias for wiser_job_helps_count
+    wiser_job_helps_count: int = 0      # Wiser Job Help (JD + ATS match runs)
+    wiser_ats_checks_count: int = 0     # Wiser ATS (Standalone ATS checks)
+    wiser_total_invocations: int = 0    # Grand total AI actions

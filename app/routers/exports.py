@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -219,10 +220,10 @@ def list_exports(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Lists all exported files created by the logged-in user."""
+    """Lists all active exported files created by the logged-in user (excluding soft-deleted)."""
     exports = (
         db.query(ExportedResume)
-        .filter(ExportedResume.user_id == current_user.id)
+        .filter(ExportedResume.user_id == current_user.id, ExportedResume.is_deleted == False)
         .order_by(ExportedResume.created_at.desc())
         .all()
     )
@@ -252,7 +253,7 @@ def download_export(
 
     export = (
         db.query(ExportedResume)
-        .filter(ExportedResume.id == export_id, ExportedResume.user_id == user.id)
+        .filter(ExportedResume.id == export_id, ExportedResume.user_id == user.id, ExportedResume.is_deleted == False)
         .first()
     )
     if not export or not os.path.exists(export.file_path):
@@ -280,10 +281,10 @@ def delete_export(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Deletes an exported file entry and cleans up the file on disk."""
+    """Soft-deletes an exported file entry, cleaning up disk while retaining lifetime quota metrics."""
     export = (
         db.query(ExportedResume)
-        .filter(ExportedResume.id == export_id, ExportedResume.user_id == current_user.id)
+        .filter(ExportedResume.id == export_id, ExportedResume.user_id == current_user.id, ExportedResume.is_deleted == False)
         .first()
     )
     if not export:
@@ -295,6 +296,7 @@ def delete_export(
         except Exception:
             pass
 
-    db.delete(export)
+    export.is_deleted = True
+    export.deleted_at = datetime.utcnow()
     db.commit()
     return {"message": "Export deleted successfully", "id": export_id}

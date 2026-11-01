@@ -27,6 +27,29 @@ def _get_gemini_client() -> genai.Client:
     return genai.Client(api_key=api_key.strip())
 
 
+MODELS_TO_TRY = [
+    "models/gemini-3.1-flash-lite",
+    "models/gemini-3.1-flash-lite-preview",
+    "models/gemini-3.5-flash",
+    "models/gemini-3.5-flash-lite",
+    "models/gemini-flash-latest",
+    "models/gemini-3.8-flash",
+]
+
+
+def _clean_markdown_json(raw_text: str) -> str:
+    """Strips markdown code fencing if present."""
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
 def analyze_jd_and_ats(
     job_description: str,
     current_resume: Dict[str, Any],
@@ -35,8 +58,7 @@ def analyze_jd_and_ats(
 ) -> Dict[str, Any]:
     """
     Performs comprehensive Job Description (JD) matching, strict ATS checker analysis,
-    and smart section/bullet enhancements using Gemini Flash.
-    Uses an external prompt file and respects the user's bold text formatting preference.
+    and smart section/bullet enhancements using Gemini Flash ('Wiser Job Help').
     """
     client = _get_gemini_client()
 
@@ -54,7 +76,6 @@ def analyze_jd_and_ats(
             for s in p_sections:
                 title = s.get("title", "")
                 content = s.get("contentHtml") or s.get("content") or ""
-                # Strip raw HTML tags for concise prompt context
                 text_clean = re.sub(r'<[^>]+>', ' ', str(content))
                 text_clean = re.sub(r'\s+', ' ', text_clean).strip()
                 if text_clean:
@@ -83,21 +104,13 @@ def analyze_jd_and_ats(
         .replace("{{BOLD_RULE}}", bold_rule)
     )
 
-    models_to_try = [
-        "models/gemini-3.1-flash-lite",
-        "models/gemini-3.1-flash-lite-preview",
-        "models/gemini-3.5-flash",
-        "models/gemini-3.5-flash-lite",
-        "models/gemini-flash-latest",
-        "models/gemini-3.8-flash",
-    ]
-
     last_error = None
     response_text = ""
+    used_model = None
 
-    for model_name in models_to_try:
+    for model_name in MODELS_TO_TRY:
         try:
-            print(f"[JD-ATS Analyzer] Querying Gemini model '{model_name}'...")
+            print(f"[Wiser JD-ATS Help] Querying Gemini model '{model_name}'...")
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -108,27 +121,89 @@ def analyze_jd_and_ats(
             )
             response_text = response.text.strip()
             if response_text:
+                used_model = model_name
                 break
         except Exception as e:
-            print(f"[JD-ATS Analyzer] Model '{model_name}' failed: {e}")
+            print(f"[Wiser JD-ATS Help] Model '{model_name}' failed: {e}")
             last_error = e
 
     if not response_text:
         raise RuntimeError(f"All Gemini models failed for JD/ATS analysis: {last_error}")
 
-    # Clean markdown codeblocks if present
-    if response_text.startswith("```"):
-        lines = response_text.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        response_text = "\n".join(lines).strip()
+    response_text = _clean_markdown_json(response_text)
 
     try:
         data = json.loads(response_text)
     except json.JSONDecodeError as jde:
-        print(f"[JD-ATS Analyzer] JSON parse error: {jde}\nResponse text: {response_text[:300]}")
+        print(f"[Wiser JD-ATS Help] JSON parse error: {jde}\nResponse text: {response_text[:300]}")
         raise ValueError(f"AI returned invalid JSON: {jde}")
 
+    data["_ai_model"] = used_model
+    return data
+
+
+def analyze_standalone_ats(
+    current_resume: Dict[str, Any],
+    allow_bold_text: bool = False
+) -> Dict[str, Any]:
+    """
+    Performs standalone 'Wiser ATS' audit on a resume without requiring a Job Description.
+    Audits parseability, power action verbs, quantified metric density, and industry keyword depth.
+    """
+    client = _get_gemini_client()
+
+    header = current_resume.get("header_json") or current_resume.get("header") or {}
+    sections = current_resume.get("sections_json") or current_resume.get("sections") or []
+
+    prompt_file_path = os.path.join(os.path.dirname(__file__), "prompts", "wiser_ats.prompt")
+    with open(prompt_file_path, "r", encoding="utf-8") as pf:
+        prompt_template = pf.read()
+
+    if allow_bold_text:
+        bold_rule = "Use bold <strong> tags sparingly for keywords and metrics in enhanced_html."
+    else:
+        bold_rule = "DO NOT include any <strong> or <b> tags in enhanced_html. Keep enhanced bullets clean and unbolded."
+
+    prompt = (
+        prompt_template
+        .replace("{{HEADER_JSON}}", json.dumps(header))
+        .replace("{{SECTIONS_JSON}}", json.dumps(sections))
+        .replace("{{BOLD_RULE}}", bold_rule)
+    )
+
+    last_error = None
+    response_text = ""
+    used_model = None
+
+    for model_name in MODELS_TO_TRY:
+        try:
+            print(f"[Wiser Standalone ATS] Querying Gemini model '{model_name}'...")
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.2,
+                ),
+            )
+            response_text = response.text.strip()
+            if response_text:
+                used_model = model_name
+                break
+        except Exception as e:
+            print(f"[Wiser Standalone ATS] Model '{model_name}' failed: {e}")
+            last_error = e
+
+    if not response_text:
+        raise RuntimeError(f"All Gemini models failed for standalone ATS analysis: {last_error}")
+
+    response_text = _clean_markdown_json(response_text)
+
+    try:
+        data = json.loads(response_text)
+    except json.JSONDecodeError as jde:
+        print(f"[Wiser Standalone ATS] JSON parse error: {jde}\nResponse text: {response_text[:300]}")
+        raise ValueError(f"AI returned invalid JSON: {jde}")
+
+    data["_ai_model"] = used_model
     return data
