@@ -10,9 +10,6 @@ COPY requirements.txt .
 COPY wheels/ /wheels/
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt
 
-# Install Playwright Chromium with its Linux system dependencies
-RUN python -m playwright install --with-deps chromium
-
 # Copy application
 COPY . .
 

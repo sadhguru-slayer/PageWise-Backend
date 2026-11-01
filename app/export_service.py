@@ -1,73 +1,51 @@
 import os
-import uuid
 import re
-from datetime import datetime
+import uuid
+import asyncio
 from bs4 import BeautifulSoup
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-import asyncio
-from playwright.sync_api import sync_playwright
+import fitz  # PyMuPDF
 
 from .config import EXPORTS_DIR
 
 
-def _sync_render_pdf(html_content: str, file_path: str):
-    """Renders PDF using Playwright in a worker thread, immune to Windows asyncio loop quirks."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        page = browser.new_page()
-        page.set_viewport_size({"width": 794, "height": 1123})
-        page.set_content(html_content, wait_until="networkidle")
+# ---------------------------------------------------------------------------
+# PDF Generation — PyMuPDF (fitz)
+# Lightweight, 0 GUI libs, ~20 MB RAM, generates PDFs in milliseconds.
+# Accepts the HTML content rendered from the resume builder.
+# ---------------------------------------------------------------------------
 
-        try:
-            page.evaluate("() => document.fonts.ready")
-        except Exception:
-            pass
+def _sync_render_pdf_pymupdf(html_content: str, file_path: str):
+    """
+    Converts HTML resume content to a PDF using PyMuPDF's Story engine.
+    No browser required. Runs entirely in-process, ~20 MB RAM.
+    """
+    story = fitz.Story(html=html_content)
 
-        pdf_bytes = page.pdf(
-            format="A4",
-            print_background=True,
-            prefer_css_page_size=True,
-            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}
-        )
-        browser.close()
+    # A4 page: 595 x 842 points (1 pt = 1/72 inch)
+    mediabox = fitz.Rect(0, 0, 595, 842)
+    # Zero margins — the HTML template controls its own padding/margins
+    where = fitz.Rect(0, 0, 595, 842)
 
-    with open(file_path, "wb") as f:
-        f.write(pdf_bytes)
+    writer = fitz.DocumentWriter(file_path)
 
+    more = True
+    while more:
+        device = writer.begin_page(mediabox)
+        more, _ = story.place(where)
+        story.draw(device)
+        writer.end_page()
 
-def _sync_render_image(html_content: str, file_path: str):
-    """Renders high-resolution PNG image of the resume using Playwright."""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        page = browser.new_page(device_scale_factor=2)  # 2x Retina resolution
-        page.set_viewport_size({"width": 794, "height": 1123})
-        page.set_content(html_content, wait_until="networkidle")
-
-        try:
-            page.evaluate("() => document.fonts.ready")
-        except Exception:
-            pass
-
-        img_bytes = page.screenshot(full_page=True, type="png")
-        browser.close()
-
-    with open(file_path, "wb") as f:
-        f.write(img_bytes)
+    writer.close()
 
 
 async def generate_pdf_from_html(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
     """
-    Renders the given HTML string using Playwright and saves it as a high-fidelity PDF.
+    Generates a PDF from HTML resume content using PyMuPDF (no browser required).
     Returns: (file_path, file_name, file_size)
     """
     safe_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', base_filename).strip() or "resume"
@@ -75,15 +53,35 @@ async def generate_pdf_from_html(html_content: str, base_filename: str = "resume
     file_name = f"{safe_name}_{unique_id}.pdf"
     file_path = os.path.join(EXPORTS_DIR, file_name)
 
-    await asyncio.to_thread(_sync_render_pdf, html_content, file_path)
+    await asyncio.to_thread(_sync_render_pdf_pymupdf, html_content, file_path)
 
     file_size = os.path.getsize(file_path)
     return file_path, file_name, file_size
 
 
+def _sync_render_image_pymupdf(html_content: str, file_path: str):
+    """
+    Renders the first page of HTML content into a PNG image via PyMuPDF.
+    """
+    temp_pdf = file_path + ".tmp.pdf"
+    try:
+        _sync_render_pdf_pymupdf(html_content, temp_pdf)
+        doc = fitz.open(temp_pdf)
+        if len(doc) > 0:
+            pix = doc[0].get_pixmap(dpi=150)
+            pix.save(file_path)
+        doc.close()
+    finally:
+        if os.path.exists(temp_pdf):
+            try:
+                os.remove(temp_pdf)
+            except Exception:
+                pass
+
+
 async def generate_image_from_html(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
     """
-    Renders the given HTML string into a high-res PNG image.
+    Renders high-res PNG image from HTML content using PyMuPDF (no browser required).
     Returns: (file_path, file_name, file_size)
     """
     safe_name = re.sub(r'[^a-zA-Z0-9_\- ]', '', base_filename).strip() or "resume"
@@ -91,11 +89,15 @@ async def generate_image_from_html(html_content: str, base_filename: str = "resu
     file_name = f"{safe_name}_{unique_id}.png"
     file_path = os.path.join(EXPORTS_DIR, file_name)
 
-    await asyncio.to_thread(_sync_render_image, html_content, file_path)
+    await asyncio.to_thread(_sync_render_image_pymupdf, html_content, file_path)
 
     file_size = os.path.getsize(file_path)
     return file_path, file_name, file_size
 
+
+# ---------------------------------------------------------------------------
+# HTML Export — Save standalone HTML file
+# ---------------------------------------------------------------------------
 
 async def generate_html_file(html_content: str, base_filename: str = "resume") -> tuple[str, str, int]:
     """
@@ -113,6 +115,11 @@ async def generate_html_file(html_content: str, base_filename: str = "resume") -
     file_size = os.path.getsize(file_path)
     return file_path, file_name, file_size
 
+
+# ---------------------------------------------------------------------------
+# DOCX Generation — python-docx
+# Generates a styled Word document from structured resume JSON data.
+# ---------------------------------------------------------------------------
 
 def hex_to_rgb(hex_str: str) -> RGBColor:
     """Helper to convert hex color like '#3b82f6' to docx RGBColor."""
@@ -297,8 +304,7 @@ def generate_docx_from_resume_data(
         content_html = sec.get("contentHtml") or sec.get("content") or ""
         if content_html:
             soup = BeautifulSoup(content_html, "html.parser")
-            
-            # Look for paragraphs or list items
+
             elements = soup.find_all(["p", "ul", "ol"])
             if not elements and soup.get_text().strip():
                 p = doc.add_paragraph()

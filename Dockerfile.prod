@@ -10,9 +10,6 @@ COPY requirements.txt .
 # On the server, pip downloads at full speed — no wheels folder needed
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright Chromium with its Linux system dependencies
-RUN python -m playwright install --with-deps chromium
-
 COPY . .
 
 EXPOSE 8000
