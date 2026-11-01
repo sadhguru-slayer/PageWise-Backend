@@ -1,6 +1,7 @@
+import json
 from datetime import datetime
 from typing import Optional, Any, List
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 # ─── Auth Schemas ────────────────────────────────────────────────────────────
@@ -23,13 +24,23 @@ class UserOut(BaseModel):
     preferences_json: Optional[Any] = {}
     created_at: datetime
 
+    @field_validator("preferences_json", mode="before")
+    @classmethod
+    def parse_prefs(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:
+                return {}
+        return v or {}
+
     class Config:
         from_attributes = True
 
 
 class UserPreferencesUpdate(BaseModel):
     name: Optional[str] = None
-    allow_bold_text: Optional[bool] = False
+    allow_bold_text: Optional[bool] = None
 
 
 class AuthResponse(BaseModel):

@@ -64,7 +64,7 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
     return AuthResponse(
         access_token=access_token,
         token_type="bearer",
-        user=UserOut.from_orm(user),
+        user=UserOut.model_validate(user),
     )
 
 
