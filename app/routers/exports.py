@@ -11,6 +11,7 @@ from ..models import ExportedResume, Resume, User
 from ..schemas import ExportPDFRequest, ExportImageRequest, ExportHTMLRequest, ExportDocxRequest, ExportedResumeOut
 from ..auth import get_current_user, get_user_from_token, security
 from ..export_service import generate_pdf_from_html, generate_image_from_html, generate_html_file, generate_docx_from_resume_data
+from ..services.subscription import enforce_export_limit, increment_export_usage
 
 router = APIRouter(prefix="/api/exports", tags=["Exports"])
 
@@ -27,6 +28,8 @@ async def export_pdf(
     """
     if not payload.html or not payload.html.strip():
         raise HTTPException(status_code=400, detail="HTML content is required for PDF generation")
+
+    enforce_export_limit(db, current_user)
 
     try:
         file_path, file_name, file_size = await generate_pdf_from_html(
@@ -68,6 +71,8 @@ async def export_pdf(
     db.commit()
     db.refresh(export_record)
 
+    increment_export_usage(db, current_user)
+
     return export_record
 
 
@@ -82,6 +87,8 @@ async def export_image(
     """
     if not payload.html or not payload.html.strip():
         raise HTTPException(status_code=400, detail="HTML content is required for image generation")
+
+    enforce_export_limit(db, current_user)
 
     try:
         file_path, file_name, file_size = await generate_image_from_html(
@@ -122,6 +129,8 @@ async def export_image(
     db.commit()
     db.refresh(export_record)
 
+    increment_export_usage(db, current_user)
+
     return export_record
 
 
@@ -136,6 +145,8 @@ async def export_html(
     """
     if not payload.html or not payload.html.strip():
         raise HTTPException(status_code=400, detail="HTML content is required")
+
+    enforce_export_limit(db, current_user)
 
     try:
         file_path, file_name, file_size = await generate_html_file(
@@ -176,6 +187,8 @@ async def export_html(
     db.commit()
     db.refresh(export_record)
 
+    increment_export_usage(db, current_user)
+
     return export_record
 
 
@@ -189,6 +202,7 @@ def export_docx(
     Generates a formatted Word (.docx) document from resume data, tracks it in the database,
     and returns metadata for downloading.
     """
+    enforce_export_limit(db, current_user)
     try:
         file_path, file_name, file_size = generate_docx_from_resume_data(
             name=payload.name or "Resume",
@@ -211,6 +225,8 @@ def export_docx(
     db.add(export_record)
     db.commit()
     db.refresh(export_record)
+
+    increment_export_usage(db, current_user)
 
     return export_record
 

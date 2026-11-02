@@ -39,3 +39,18 @@ GMAIL_CLIENT_ID = os.getenv("CLIENT_ID") or os.getenv("GMAIL_CLIENT_ID", "")
 GMAIL_CLIENT_SECRET = os.getenv("CLIENT_SECRET") or os.getenv("CLIENT_SECRETE") or os.getenv("GMAIL_CLIENT_SECRET", "")
 GMAIL_REFRESH_TOKEN = os.getenv("REFRESH_TOKEN") or os.getenv("GMAIL_REFRESH_TOKEN", "")
 GMAIL_PROJECT_ID = os.getenv("PROJECT_ID") or os.getenv("GMAIL_PROJECT_ID", "")
+
+# Razorpay Payment Gateway Configuration
+# Supports test keys specified in user prompt: RAZORPAY_KEY_TEST & RAZORPAY_SECRETE_TEST
+RAZORPAY_KEY_ID = (
+    os.getenv("RAZORPAY_KEY_TEST")
+    or os.getenv("RAZORPAY_KEY_ID")
+    or os.getenv("NEXT_PUBLIC_RAZORPAY_KEY_ID", "")
+)
+RAZORPAY_KEY_SECRET = (
+    os.getenv("RAZORPAY_SECRETE_TEST")
+    or os.getenv("RAZORPAY_SECRET_TEST")
+    or os.getenv("RAZORPAY_KEY_SECRET")
+    or os.getenv("RAZORPAY_SECRET", "")
+)
+

@@ -12,6 +12,13 @@ from ..schemas import (
     TemplateCreate, TemplateOut, UsageStats
 )
 from ..auth import get_current_user
+from ..services.subscription import (
+    enforce_resume_limit,
+    enforce_wiser_ai_limit,
+    increment_wiser_ai_usage,
+    get_user_active_workspace_ids,
+    enforce_resume_edit_permission,
+)
 
 router = APIRouter(prefix="/api/resumes", tags=["Resumes"])
 
@@ -46,9 +53,11 @@ def list_resumes(
     resumes = (
         db.query(Resume)
         .filter(Resume.user_id == current_user.id, Resume.is_deleted == False)
-        .order_by(Resume.updated_at.desc())
+        .order_by(Resume.is_primary.desc(), Resume.updated_at.desc())
         .all()
     )
+
+    active_ids = get_user_active_workspace_ids(db, current_user)
 
     result = []
     for r in resumes:
@@ -65,6 +74,9 @@ def list_resumes(
                 target_job_title=r.target_job_title,
                 target_company=r.target_company,
                 target_ats_score=r.target_ats_score,
+                is_primary=bool(r.is_primary),
+                is_locked=(r.id not in active_ids),
+                parent_resume_id=r.parent_resume_id,
             )
         )
     return result
@@ -77,16 +89,27 @@ def create_resume(
     db: Session = Depends(get_db)
 ):
     """Creates a new resume for the currently authenticated user."""
+    enforce_resume_limit(db, current_user)
+
+    existing_count = (
+        db.query(Resume)
+        .filter(Resume.user_id == current_user.id, Resume.is_deleted == False)
+        .count()
+    )
+
     new_resume = Resume(
         user_id=current_user.id,
         name=payload.name or "Untitled Resume",
         header_json=serialize_json_field(payload.header_json),
         settings_json=serialize_json_field(payload.settings_json),
         sections_json=serialize_json_field(payload.sections_json),
+        is_primary=(existing_count == 0),
     )
     db.add(new_resume)
     db.commit()
     db.refresh(new_resume)
+
+    active_ids = get_user_active_workspace_ids(db, current_user)
 
     return ResumeDetail(
         id=new_resume.id,
@@ -97,6 +120,9 @@ def create_resume(
         sections_json=parse_json_field(new_resume.sections_json, []),
         created_at=new_resume.created_at,
         updated_at=new_resume.updated_at,
+        is_primary=bool(new_resume.is_primary),
+        is_locked=(new_resume.id not in active_ids),
+        parent_resume_id=new_resume.parent_resume_id,
     )
 
 
@@ -252,6 +278,8 @@ def get_resume(
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found or access denied")
 
+    active_ids = get_user_active_workspace_ids(db, current_user)
+
     return ResumeDetail(
         id=resume.id,
         user_id=resume.user_id,
@@ -266,6 +294,9 @@ def get_resume(
         target_job_description=resume.target_job_description,
         target_ats_score=resume.target_ats_score,
         jd_analysis_json=parse_json_field(resume.jd_analysis_json, {}),
+        is_primary=bool(resume.is_primary),
+        is_locked=(resume.id not in active_ids),
+        parent_resume_id=resume.parent_resume_id,
     )
 
 
@@ -276,7 +307,7 @@ def update_resume(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Updates an existing resume, ensuring user ownership."""
+    """Updates an existing resume, ensuring user ownership and plan active workspace permission."""
     resume = (
         db.query(Resume)
         .filter(Resume.id == resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
@@ -284,6 +315,9 @@ def update_resume(
     )
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found or access denied")
+
+    # Strictly verify that this resume is within allowed active workspaces for user's tier
+    enforce_resume_edit_permission(db, current_user, resume_id)
 
     if payload.name:
         resume.name = payload.name
@@ -306,6 +340,8 @@ def update_resume(
     db.commit()
     db.refresh(resume)
 
+    active_ids = get_user_active_workspace_ids(db, current_user)
+
     return ResumeDetail(
         id=resume.id,
         user_id=resume.user_id,
@@ -320,6 +356,57 @@ def update_resume(
         target_job_description=resume.target_job_description,
         target_ats_score=resume.target_ats_score,
         jd_analysis_json=parse_json_field(resume.jd_analysis_json, {}),
+        is_primary=bool(resume.is_primary),
+        is_locked=(resume.id not in active_ids),
+        parent_resume_id=resume.parent_resume_id,
+    )
+
+
+@router.post("/{resume_id}/set-primary", response_model=ResumeDetail)
+def set_primary_resume(
+    resume_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Sets the specified resume as the user's primary/master resume.
+    Unsets primary status for all other resumes of this user.
+    """
+    resume = (
+        db.query(Resume)
+        .filter(Resume.id == resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
+        .first()
+    )
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found or access denied")
+
+    # Unset is_primary for all other user resumes
+    db.query(Resume).filter(Resume.user_id == current_user.id, Resume.is_deleted == False).update({"is_primary": False})
+
+    # Set selected resume as primary
+    resume.is_primary = True
+    db.commit()
+    db.refresh(resume)
+
+    active_ids = get_user_active_workspace_ids(db, current_user)
+
+    return ResumeDetail(
+        id=resume.id,
+        user_id=resume.user_id,
+        name=resume.name,
+        header_json=parse_json_field(resume.header_json, {}),
+        settings_json=parse_json_field(resume.settings_json, {}),
+        sections_json=parse_json_field(resume.sections_json, []),
+        created_at=resume.created_at,
+        updated_at=resume.updated_at,
+        target_job_title=resume.target_job_title,
+        target_company=resume.target_company,
+        target_job_description=resume.target_job_description,
+        target_ats_score=resume.target_ats_score,
+        jd_analysis_json=parse_json_field(resume.jd_analysis_json, {}),
+        is_primary=True,
+        is_locked=(resume.id not in active_ids),
+        parent_resume_id=resume.parent_resume_id,
     )
 
 
@@ -364,6 +451,9 @@ async def parse_pdf_resume(
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported for import.")
 
+    if create_resume:
+        enforce_resume_limit(db, current_user)
+
     try:
         content = await file.read()
         print(f"[parse-pdf] Read {len(content)} bytes from PDF. Extracting text...")
@@ -387,6 +477,7 @@ async def parse_pdf_resume(
         raise HTTPException(status_code=500, detail=f"Wiser AI extraction failed: {str(ge)}")
 
     if create_resume:
+        enforce_resume_limit(db, current_user)
         name = resume_name or parsed_data.get("header", {}).get("name") or "Imported Resume"
         default_settings = {
             "marginTop": 15,
@@ -411,6 +502,8 @@ async def parse_pdf_resume(
         db.commit()
         db.refresh(new_resume)
 
+        active_ids = get_user_active_workspace_ids(db, current_user)
+
         return {
             "success": True,
             "created_resume_id": new_resume.id,
@@ -425,6 +518,9 @@ async def parse_pdf_resume(
                 sections_json=parse_json_field(new_resume.sections_json, []),
                 created_at=new_resume.created_at,
                 updated_at=new_resume.updated_at,
+                is_primary=bool(new_resume.is_primary),
+                is_locked=(new_resume.id not in active_ids),
+                parent_resume_id=new_resume.parent_resume_id,
             )
         }
 
@@ -450,6 +546,9 @@ def analyze_job_description(
 
     if not payload.job_description or not payload.job_description.strip():
         raise HTTPException(status_code=400, detail="Job description text is required.")
+
+    # Quota check
+    enforce_wiser_ai_limit(db, current_user, action_type="wiser_job_help")
 
     # 1. Fetch current resume
     current_resume_dict = None
@@ -556,6 +655,8 @@ def analyze_job_description(
         db.add(log_entry)
         db.commit()
 
+        increment_wiser_ai_usage(db, current_user, action_type="wiser_job_help")
+
         return {
             "success": True,
             "data": analysis_result
@@ -579,6 +680,9 @@ def analyze_standalone_resume_ats(
     Audits keyword positioning, action verbs, quantified impact, and structural parseability.
     """
     from ..jd_analyzer import analyze_standalone_ats
+
+    # Quota check
+    enforce_wiser_ai_limit(db, current_user, action_type="wiser_ats_check")
 
     # 1. Fetch current resume
     current_resume_dict = None
@@ -659,6 +763,8 @@ def analyze_standalone_resume_ats(
         db.add(log_entry)
         db.commit()
 
+        increment_wiser_ai_usage(db, current_user, action_type="wiser_ats_check")
+
         return {
             "success": True,
             "data": analysis_result
@@ -693,6 +799,8 @@ def clone_resume(
     if not source:
         raise HTTPException(status_code=404, detail="Source resume not found or access denied")
 
+    enforce_resume_limit(db, current_user)
+
     # Build a descriptive name
     if payload.new_name:
         new_name = payload.new_name
@@ -714,10 +822,13 @@ def clone_resume(
         target_job_description=payload.target_job_description,
         target_ats_score=payload.target_ats_score,
         jd_analysis_json=source.jd_analysis_json,
+        parent_resume_id=source.id,
     )
     db.add(cloned)
     db.commit()
     db.refresh(cloned)
+
+    active_ids = get_user_active_workspace_ids(db, current_user)
 
     return ResumeDetail(
         id=cloned.id,
@@ -733,6 +844,9 @@ def clone_resume(
         target_job_description=cloned.target_job_description,
         target_ats_score=cloned.target_ats_score,
         jd_analysis_json=parse_json_field(cloned.jd_analysis_json, {}),
+        is_primary=bool(cloned.is_primary),
+        is_locked=(cloned.id not in active_ids),
+        parent_resume_id=cloned.parent_resume_id,
     )
 
 

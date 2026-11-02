@@ -243,6 +243,7 @@ def get_me(current_user: User = Depends(get_current_user)):
         id=current_user.id,
         name=current_user.name,
         email=current_user.email,
+        is_admin=bool(current_user.is_admin),
         preferences_json=prefs or {},
         created_at=current_user.created_at,
     )

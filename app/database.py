@@ -21,13 +21,28 @@ Base = declarative_base()
 def run_auto_migrations():
     """
     Ensures existing databases gracefully adapt to schema additions like
-    soft-delete columns without requiring manual dropping or migration errors.
+    soft-delete columns, admin flags, parent resume lineage, and payment tables.
     """
     try:
         inspector = inspect(engine)
         existing_tables = inspector.get_table_names()
 
         with engine.connect() as conn:
+            # Users table additions
+            if "users" in existing_tables:
+                user_cols = [c["name"] for c in inspector.get_columns("users")]
+                if "is_admin" not in user_cols:
+                    conn.execute(text("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0 NOT NULL"))
+
+            # Resumes table additions
+            if "resumes" in existing_tables:
+                resume_cols = [c["name"] for c in inspector.get_columns("resumes")]
+                if "parent_resume_id" not in resume_cols:
+                    conn.execute(text("ALTER TABLE resumes ADD COLUMN parent_resume_id INTEGER NULL"))
+                if "is_primary" not in resume_cols:
+                    conn.execute(text("ALTER TABLE resumes ADD COLUMN is_primary BOOLEAN DEFAULT 0 NOT NULL"))
+
+            # Soft deletes
             for table in ["resumes", "resume_templates", "exported_resumes"]:
                 if table in existing_tables:
                     col_names = [c["name"] for c in inspector.get_columns(table)]

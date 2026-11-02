@@ -11,6 +11,7 @@ class User(Base):
     name = Column(String(100), nullable=False)
     email = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
     preferences_json = Column(Text, default="{}")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -20,6 +21,8 @@ class User(Base):
     exports = relationship("ExportedResume", back_populates="user", cascade="all, delete-orphan")
     templates = relationship("ResumeTemplate", back_populates="owner", cascade="all, delete-orphan")
     ai_logs = relationship("AIUsageLog", back_populates="user", cascade="all, delete-orphan")
+    subscription = relationship("Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan")
+    payment_orders = relationship("PaymentOrder", back_populates="user", cascade="all, delete-orphan")
 
 
 class Resume(Base):
@@ -40,6 +43,12 @@ class Resume(Base):
     target_job_description = Column(Text, nullable=True)
     target_ats_score = Column(Float, nullable=True)
     jd_analysis_json = Column(Text, default="{}")
+
+    # ─── Branching / Cloned Resume Lineage ─────────────────────────────────────
+    parent_resume_id = Column(Integer, ForeignKey("resumes.id", ondelete="SET NULL"), nullable=True)
+
+    # ─── Primary / Master Resume Designation ──────────────────────────────────
+    is_primary = Column(Boolean, default=False, nullable=False)
 
     # ─── Soft Deletion & Audit ────────────────────────────────────────────────
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
@@ -126,3 +135,70 @@ class AIUsageLog(Base):
     # Relationships
     user = relationship("User", back_populates="ai_logs")
     resume = relationship("Resume", back_populates="ai_logs")
+
+
+# ─── Subscription & Payment Tracking ─────────────────────────────────────────
+
+class PlanType:
+    FREE = "free"
+    DAY_PASS = "day_pass"
+    PRO_MONTHLY = "pro_monthly"
+
+
+class Subscription(Base):
+    """Tracks the active subscription tier and billing cycle for a user."""
+    __tablename__ = "subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False, index=True)
+
+    plan_type = Column(String(50), default=PlanType.FREE, nullable=False)  # "free", "day_pass", "pro_monthly"
+    status = Column(String(50), default="active", nullable=False)          # "active", "expired", "cancelled"
+
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=True)                          # Null for lifetime free, +24h for Day Pass, +30d for Pro
+
+    # Quota counters for the current active billing cycle / period
+    resumes_created_in_period = Column(Integer, default=0)
+    exports_used_in_period = Column(Integer, default=0)
+    wiser_job_help_used = Column(Integer, default=0)
+    wiser_ats_used = Column(Integer, default=0)
+    period_reset_at = Column(DateTime, default=datetime.utcnow)
+
+    # Razorpay reference
+    razorpay_payment_id = Column(String(100), nullable=True)
+    razorpay_order_id = Column(String(100), nullable=True)
+    razorpay_subscription_id = Column(String(100), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="subscription")
+
+
+class PaymentOrder(Base):
+    """Tracks individual payment attempts and successful orders."""
+    __tablename__ = "payment_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    plan_type = Column(String(50), nullable=False)
+    amount_inr = Column(Integer, nullable=False)              # Stored in INR (e.g. 49, 199)
+    currency = Column(String(10), default="INR", nullable=False)
+    status = Column(String(50), default="created", nullable=False)  # "created", "paid", "failed"
+
+    razorpay_order_id = Column(String(100), unique=True, index=True, nullable=True)
+    razorpay_payment_id = Column(String(100), index=True, nullable=True)
+    razorpay_signature = Column(String(255), nullable=True)
+
+    receipt = Column(String(100), nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="payment_orders")
+

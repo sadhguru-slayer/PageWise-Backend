@@ -22,6 +22,7 @@ class UserOut(BaseModel):
     id: int
     name: str
     email: str
+    is_admin: Optional[bool] = False
     preferences_json: Optional[Any] = {}
     created_at: datetime
 
@@ -144,6 +145,9 @@ class ResumeSummary(BaseModel):
     target_job_title: Optional[str] = None
     target_company: Optional[str] = None
     target_ats_score: Optional[float] = None
+    is_primary: Optional[bool] = False
+    is_locked: Optional[bool] = False
+    parent_resume_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -164,6 +168,9 @@ class ResumeDetail(BaseModel):
     target_job_description: Optional[str] = None
     target_ats_score: Optional[float] = None
     jd_analysis_json: Optional[Any] = {}
+    is_primary: Optional[bool] = False
+    is_locked: Optional[bool] = False
+    parent_resume_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -293,4 +300,76 @@ class UsageStats(BaseModel):
     period_resumes_created: int = 0
     period_templates_created: int = 0
     period_exports_generated: int = 0
+
+
+# ─── Payment & Subscription Schemas ──────────────────────────────────────────
+
+class CreateOrderRequest(BaseModel):
+    plan_type: str  # "day_pass" | "pro_monthly"
+
+
+class VerifyPaymentRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+class PlanStatusResponse(BaseModel):
+    plan_type: str
+    plan_name: str
+    status: str
+    is_admin: bool
+    started_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    limits: dict
+    usage: dict
+    remaining: Optional[dict] = None
+    features: List[str]
+
+
+# ─── Admin Schemas ───────────────────────────────────────────────────────────
+
+class AdminLoginRequest(BaseModel):
+    username_or_email: str
+    password: str
+
+
+class AdminResetSelfPassword(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6, max_length=128)
+    new_email: Optional[EmailStr] = None
+    new_name: Optional[str] = None
+
+class AdminUserCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    email: EmailStr
+    password: str = Field(..., min_length=6, max_length=128)
+    is_admin: Optional[bool] = False
+    plan_type: Optional[str] = "free"
+
+
+class AdminUserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
+    plan_type: Optional[str] = None
+
+
+class MetricStat(BaseModel):
+    total: int = 0
+    avg_per_user: float = 0.0
+    max_per_user: int = 0
+    min_per_user: int = 0
+
+
+class AdminInsightsResponse(BaseModel):
+    total_users: int = 0
+    active_plans: dict = {}
+    ai_usage: dict = {}
+    exports: MetricStat
+    custom_templates: MetricStat
+    resumes: MetricStat
+    branched_resumes: MetricStat
+
     lifetime_wiser_invocations: int = 0
