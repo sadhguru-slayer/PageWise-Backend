@@ -82,9 +82,9 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return combined_text
 
 
-def parse_resume_with_gemini(extracted_text: str, allow_bold_text: bool = False) -> dict:
+def parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = False) -> dict:
     """
-    Uses Google GenAI SDK (google-genai) with Gemini Flash models to parse raw resume text
+    Uses Wiser AI models to parse raw resume text
     into a structured Resume Header and individual Sections using an external prompt file.
     """
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -121,7 +121,7 @@ def parse_resume_with_gemini(extracted_text: str, allow_bold_text: bool = False)
 
     for model_name in candidate_models:
         try:
-            print(f"[Gemini AI] Attempting resume parsing with model: {model_name}...")
+            print(f"[Wiser AI] Attempting resume parsing with engine...")
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -130,14 +130,14 @@ def parse_resume_with_gemini(extracted_text: str, allow_bold_text: bool = False)
                 )
             )
             if response and response.text:
-                print(f"[Gemini AI] Successfully parsed resume with {model_name}!")
+                print(f"[Wiser AI] Successfully parsed resume!")
                 break
         except Exception as e:
-            print(f"[Gemini AI] Model {model_name} failed: {e}")
+            print(f"[Wiser AI] Parsing attempt failed: {e}")
             last_error = e
 
     if not response or not response.text:
-        raise RuntimeError(f"All Gemini models failed to parse resume: {last_error}")
+        raise RuntimeError(f"Wiser AI engine failed to parse resume: {last_error}")
 
     raw_response_text = response.text.strip()
     parsed_data = json.loads(raw_response_text)
@@ -213,3 +213,7 @@ def parse_resume_with_gemini(extracted_text: str, allow_bold_text: bool = False)
             sec["links"] = []
 
     return parsed_data
+
+
+# Backward-compatible alias
+parse_resume_with_gemini = parse_resume_with_wiser_ai

@@ -281,4 +281,16 @@ class UsageStats(BaseModel):
     jd_analyses_count: int = 0          # Alias for wiser_job_helps_count
     wiser_job_helps_count: int = 0      # Wiser Job Help (JD + ATS match runs)
     wiser_ats_checks_count: int = 0     # Wiser ATS (Standalone ATS checks)
-    wiser_total_invocations: int = 0    # Grand total AI actions
+    wiser_total_invocations: int = 0    # Grand total AI actions in selected period
+
+    # Date Range & Billing Cycle metadata
+    period: str = "all"                 # "this_billing" | "prev_billing" | "last_3_months" | "all"
+    period_label: str = "All Time"
+    period_start: Optional[datetime] = None
+    period_end: Optional[datetime] = None
+
+    # Resources generated strictly within the selected duration
+    period_resumes_created: int = 0
+    period_templates_created: int = 0
+    period_exports_generated: int = 0
+    lifetime_wiser_invocations: int = 0

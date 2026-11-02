@@ -1,6 +1,6 @@
 import json
-from datetime import datetime
-from typing import List
+from datetime import datetime, timedelta
+from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from sqlalchemy.orm import Session
 
@@ -97,6 +97,143 @@ def create_resume(
         sections_json=parse_json_field(new_resume.sections_json, []),
         created_at=new_resume.created_at,
         updated_at=new_resume.updated_at,
+    )
+
+
+# ─── Usage Stats (Mounted BEFORE /{resume_id} to prevent path collision) ───────
+
+def resolve_date_range(period: str, start_date_str: Optional[str] = None, end_date_str: Optional[str] = None):
+    now = datetime.utcnow()
+    start_dt = None
+    end_dt = None
+    label = "All Time"
+
+    if start_date_str:
+        try:
+            start_dt = datetime.fromisoformat(start_date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            pass
+    if end_date_str:
+        try:
+            end_dt = datetime.fromisoformat(end_date_str.replace("Z", "+00:00")).replace(tzinfo=None)
+        except Exception:
+            pass
+
+    if start_dt or end_dt:
+        label = "Custom Range"
+        return start_dt, end_dt, label
+
+    p = (period or "all").lower().strip()
+    if p in ("this_billing", "this_month", "current"):
+        # 1st of current month at 00:00:00 UTC
+        start_dt = datetime(now.year, now.month, 1)
+        end_dt = now
+        label = "This Billing Cycle"
+    elif p in ("prev_billing", "prev_month", "last_month"):
+        # 1st of previous month to end of previous month
+        first_of_this_month = datetime(now.year, now.month, 1)
+        last_day_prev_month = first_of_this_month - timedelta(days=1)
+        start_dt = datetime(last_day_prev_month.year, last_day_prev_month.month, 1)
+        end_dt = datetime(last_day_prev_month.year, last_day_prev_month.month, last_day_prev_month.day, 23, 59, 59)
+        label = "Previous Billing Cycle"
+    elif p in ("last_3_months", "3_months", "90_days"):
+        start_dt = now - timedelta(days=90)
+        end_dt = now
+        label = "Last 3 Months"
+    else:  # "all"
+        start_dt = None
+        end_dt = None
+        label = "All Time"
+
+    return start_dt, end_dt, label
+
+
+@router.get("/usage-stats", response_model=UsageStats)
+def get_usage_stats(
+    period: str = "all",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns aggregated usage statistics and Wiser AI metrics for the authenticated user,
+    supporting duration filters ('this_billing', 'prev_billing', 'last_3_months', 'all', or custom dates).
+    """
+    start_dt, end_dt, period_label = resolve_date_range(period, start_date, end_date)
+
+    # Base query for AI Usage Logs
+    ai_log_q = db.query(AIUsageLog).filter(AIUsageLog.user_id == current_user.id)
+    resume_q = db.query(Resume).filter(Resume.user_id == current_user.id)
+    tmpl_q = db.query(ResumeTemplate).filter(ResumeTemplate.user_id == current_user.id)
+    export_q = db.query(ExportedResume).filter(ExportedResume.user_id == current_user.id)
+
+    # Lifetime total counts (protects against quota abuse — never reduced by date filters or deletes)
+    total_resumes = resume_q.count()
+    total_templates = tmpl_q.count()
+    total_exports = export_q.count()
+    lifetime_wiser_invocations = ai_log_q.count()
+
+    # Active in workspace (excluding soft-deleted)
+    active_resumes = db.query(Resume).filter(Resume.user_id == current_user.id, Resume.is_deleted == False).count()
+    active_templates = db.query(ResumeTemplate).filter(ResumeTemplate.user_id == current_user.id, ResumeTemplate.is_deleted == False).count()
+    active_exports = db.query(ExportedResume).filter(ExportedResume.user_id == current_user.id, ExportedResume.is_deleted == False).count()
+    targeted_count = db.query(Resume).filter(
+        Resume.user_id == current_user.id,
+        Resume.is_deleted == False,
+        Resume.target_job_title.isnot(None)
+    ).count()
+
+    # Filter by period timeframe
+    if start_dt:
+        ai_log_q = ai_log_q.filter(AIUsageLog.created_at >= start_dt)
+        resume_q = resume_q.filter(Resume.created_at >= start_dt)
+        tmpl_q = tmpl_q.filter(ResumeTemplate.created_at >= start_dt)
+        export_q = export_q.filter(ExportedResume.created_at >= start_dt)
+    if end_dt:
+        ai_log_q = ai_log_q.filter(AIUsageLog.created_at <= end_dt)
+        resume_q = resume_q.filter(Resume.created_at <= end_dt)
+        tmpl_q = tmpl_q.filter(ResumeTemplate.created_at <= end_dt)
+        export_q = export_q.filter(ExportedResume.created_at <= end_dt)
+
+    wiser_job_helps = ai_log_q.filter(AIUsageLog.action_type == "wiser_job_help").count()
+    wiser_ats_checks = ai_log_q.filter(AIUsageLog.action_type == "wiser_ats_check").count()
+    wiser_total = ai_log_q.count()
+
+    period_resumes = resume_q.count()
+    period_templates = tmpl_q.count()
+    period_exports = export_q.count()
+
+    # Graceful fallback for historical accounts created before AIUsageLog table
+    if period == "all" and wiser_job_helps == 0 and targeted_count > 0:
+        wiser_job_helps = targeted_count
+
+    if wiser_total < (wiser_job_helps + wiser_ats_checks):
+        wiser_total = wiser_job_helps + wiser_ats_checks
+
+    if lifetime_wiser_invocations < wiser_total:
+        lifetime_wiser_invocations = wiser_total
+
+    return UsageStats(
+        period=period,
+        period_label=period_label,
+        period_start=start_dt,
+        period_end=end_dt,
+        resume_count=active_resumes,
+        total_resumes_generated=total_resumes,
+        template_count=active_templates,
+        total_templates_created=total_templates,
+        export_count=active_exports,
+        total_exports_generated=total_exports,
+        targeted_resume_count=targeted_count,
+        jd_analyses_count=wiser_job_helps,
+        wiser_job_helps_count=wiser_job_helps,
+        wiser_ats_checks_count=wiser_ats_checks,
+        wiser_total_invocations=wiser_total,
+        lifetime_wiser_invocations=lifetime_wiser_invocations,
+        period_resumes_created=period_resumes,
+        period_templates_created=period_templates,
+        period_exports_generated=period_exports,
     )
 
 
@@ -217,9 +354,9 @@ async def parse_pdf_resume(
 ):
     """
     Extracts text from an uploaded resume PDF using PyMuPDF and uses
-    Google GenAI (Gemini) to parse it into structured sections and header.
+    Wiser AI engine to parse it into structured sections and header.
     """
-    from ..ai_extractor import extract_text_from_pdf, parse_resume_with_gemini
+    from ..ai_extractor import extract_text_from_pdf, parse_resume_with_wiser_ai
     import traceback
 
     print(f"[parse-pdf] Received uploaded file: '{file.filename}', user: {current_user.email}")
@@ -237,17 +374,17 @@ async def parse_pdf_resume(
         raise HTTPException(status_code=400, detail=f"Failed to extract text from PDF: {str(e)}")
 
     try:
-        print("[parse-pdf] Sending extracted text to Gemini AI...")
+        print("[parse-pdf] Sending extracted text to Wiser AI...")
         user_prefs = parse_json_field(current_user.preferences_json, {})
         allow_bold = bool(user_prefs.get("allow_bold_text", False))
-        parsed_data = parse_resume_with_gemini(extracted_text, allow_bold_text=allow_bold)
-        print("[parse-pdf] Gemini AI parsing completed successfully.")
+        parsed_data = parse_resume_with_wiser_ai(extracted_text, allow_bold_text=allow_bold)
+        print("[parse-pdf] Wiser AI parsing completed successfully.")
     except ValueError as ve:
         print(f"[parse-pdf] Configuration/Validation Error: {ve}")
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as ge:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Gemini AI extraction failed: {str(ge)}")
+        raise HTTPException(status_code=500, detail=f"Wiser AI extraction failed: {str(ge)}")
 
     if create_resume:
         name = resume_name or parsed_data.get("header", {}).get("name") or "Imported Resume"
@@ -382,9 +519,11 @@ def analyze_job_description(
         )
 
         # Automatically store summarized JD & ATS analysis in the target resume if resume_id is provided
+        valid_res_id = None
         if payload.resume_id:
             res_to_update = db.query(Resume).filter(Resume.id == payload.resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False).first()
             if res_to_update:
+                valid_res_id = res_to_update.id
                 job_an = analysis_result.get("job_analysis", {})
                 ats_ck = analysis_result.get("ats_check", {})
                 res_to_update.target_job_title = job_an.get("title") or res_to_update.target_job_title
@@ -398,7 +537,8 @@ def analyze_job_description(
                 db.commit()
 
         # Record Wiser AI Usage Log (Job Help)
-        ai_model_name = analysis_result.pop("_ai_model", "gemini-flash")
+        analysis_result.pop("_ai_model", None)
+        ai_model_name = "Wiser AI Engine"
         job_an = analysis_result.get("job_analysis", {})
         ats_ck = analysis_result.get("ats_check", {})
         meta = {
@@ -408,7 +548,7 @@ def analyze_job_description(
         }
         log_entry = AIUsageLog(
             user_id=current_user.id,
-            resume_id=payload.resume_id,
+            resume_id=valid_res_id,
             action_type="wiser_job_help",
             ai_model=ai_model_name,
             meta_json=json.dumps(meta),
@@ -485,20 +625,24 @@ def analyze_standalone_resume_ats(
             allow_bold_text=allow_bold
         )
 
-        ai_model_name = analysis_result.pop("_ai_model", "gemini-flash")
+        analysis_result.pop("_ai_model", None)
+        ai_model_name = "Wiser AI Engine"
         ats_ck = analysis_result.get("ats_check", {})
         inferred = analysis_result.get("inferred_domain", {})
 
         # If resume_id provided, update target_ats_score on the resume
+        valid_res_id = None
         if payload.resume_id:
             res_to_update = db.query(Resume).filter(
                 Resume.id == payload.resume_id,
                 Resume.user_id == current_user.id,
                 Resume.is_deleted == False
             ).first()
-            if res_to_update and ats_ck.get("overall_score") is not None:
-                res_to_update.target_ats_score = ats_ck.get("overall_score")
-                db.commit()
+            if res_to_update:
+                valid_res_id = res_to_update.id
+                if ats_ck.get("overall_score") is not None:
+                    res_to_update.target_ats_score = ats_ck.get("overall_score")
+                    db.commit()
 
         # Log AI action for Wiser usage tracking
         meta = {
@@ -507,7 +651,7 @@ def analyze_standalone_resume_ats(
         }
         log_entry = AIUsageLog(
             user_id=current_user.id,
-            resume_id=payload.resume_id,
+            resume_id=valid_res_id,
             action_type="wiser_ats_check",
             ai_model=ai_model_name,
             meta_json=json.dumps(meta),
@@ -660,55 +804,6 @@ def delete_template(
     tmpl.deleted_at = datetime.utcnow()
     db.commit()
     return {"message": "Template deleted", "id": template_id}
-
-
-# ─── Usage Stats ───────────────────────────────────────────────────────────────
-
-@router.get("/usage-stats", response_model=UsageStats)
-def get_usage_stats(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Returns aggregated usage statistics and Wiser AI metrics for the authenticated user."""
-    # Active resources currently in workspace
-    active_resumes = db.query(Resume).filter(Resume.user_id == current_user.id, Resume.is_deleted == False).count()
-    active_templates = db.query(ResumeTemplate).filter(ResumeTemplate.user_id == current_user.id, ResumeTemplate.is_deleted == False).count()
-    active_exports = db.query(ExportedResume).filter(ExportedResume.user_id == current_user.id, ExportedResume.is_deleted == False).count()
-    targeted_count = (
-        db.query(Resume)
-        .filter(Resume.user_id == current_user.id, Resume.is_deleted == False, Resume.target_job_title.isnot(None))
-        .count()
-    )
-
-    # Lifetime total resources created (including soft-deleted)
-    total_resumes = db.query(Resume).filter(Resume.user_id == current_user.id).count()
-    total_templates = db.query(ResumeTemplate).filter(ResumeTemplate.user_id == current_user.id).count()
-    total_exports = db.query(ExportedResume).filter(ExportedResume.user_id == current_user.id).count()
-
-    # Wiser AI layer metrics (subscriptions & quota enforcement)
-    wiser_job_helps = db.query(AIUsageLog).filter(AIUsageLog.user_id == current_user.id, AIUsageLog.action_type == "wiser_job_help").count()
-    wiser_ats_checks = db.query(AIUsageLog).filter(AIUsageLog.user_id == current_user.id, AIUsageLog.action_type == "wiser_ats_check").count()
-    wiser_total = db.query(AIUsageLog).filter(AIUsageLog.user_id == current_user.id).count()
-
-    # Graceful fallback for historical accounts created before AIUsageLog table
-    if wiser_job_helps == 0 and targeted_count > 0:
-        wiser_job_helps = targeted_count
-        wiser_total = targeted_count
-
-    return UsageStats(
-        resume_count=active_resumes,
-        total_resumes_generated=total_resumes,
-        template_count=active_templates,
-        total_templates_created=total_templates,
-        export_count=active_exports,
-        total_exports_generated=total_exports,
-        targeted_resume_count=targeted_count,
-        jd_analyses_count=wiser_job_helps,
-        wiser_job_helps_count=wiser_job_helps,
-        wiser_ats_checks_count=wiser_ats_checks,
-        wiser_total_invocations=wiser_total,
-    )
-
 
 
 # ─── Legacy Backward Compatibility Router (/api/resume/*) ──────────────────────

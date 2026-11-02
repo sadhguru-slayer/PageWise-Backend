@@ -58,7 +58,7 @@ def analyze_jd_and_ats(
 ) -> Dict[str, Any]:
     """
     Performs comprehensive Job Description (JD) matching, strict ATS checker analysis,
-    and smart section/bullet enhancements using Gemini Flash ('Wiser Job Help').
+    and smart section/bullet enhancements using Wiser AI ('Wiser Job Help').
     """
     client = _get_gemini_client()
 
@@ -110,7 +110,7 @@ def analyze_jd_and_ats(
 
     for model_name in MODELS_TO_TRY:
         try:
-            print(f"[Wiser JD-ATS Help] Querying Gemini model '{model_name}'...")
+            print(f"[Wiser JD-ATS Help] Executing Wiser AI query...")
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -121,14 +121,14 @@ def analyze_jd_and_ats(
             )
             response_text = response.text.strip()
             if response_text:
-                used_model = model_name
+                used_model = "Wiser AI"
                 break
         except Exception as e:
-            print(f"[Wiser JD-ATS Help] Model '{model_name}' failed: {e}")
+            print(f"[Wiser JD-ATS Help] Attempt failed: {e}")
             last_error = e
 
     if not response_text:
-        raise RuntimeError(f"All Gemini models failed for JD/ATS analysis: {last_error}")
+        raise RuntimeError(f"Wiser AI analysis failed: {last_error}")
 
     response_text = _clean_markdown_json(response_text)
 
@@ -177,7 +177,7 @@ def analyze_standalone_ats(
 
     for model_name in MODELS_TO_TRY:
         try:
-            print(f"[Wiser Standalone ATS] Querying Gemini model '{model_name}'...")
+            print(f"[Wiser Standalone ATS] Executing Wiser AI query...")
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
@@ -188,14 +188,14 @@ def analyze_standalone_ats(
             )
             response_text = response.text.strip()
             if response_text:
-                used_model = model_name
+                used_model = "Wiser AI"
                 break
         except Exception as e:
-            print(f"[Wiser Standalone ATS] Model '{model_name}' failed: {e}")
+            print(f"[Wiser Standalone ATS] Attempt failed: {e}")
             last_error = e
 
     if not response_text:
-        raise RuntimeError(f"All Gemini models failed for standalone ATS analysis: {last_error}")
+        raise RuntimeError(f"Wiser AI standalone ATS analysis failed: {last_error}")
 
     response_text = _clean_markdown_json(response_text)
 
