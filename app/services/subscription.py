@@ -94,7 +94,7 @@ PLAN_CONFIGS: Dict[str, Dict[str, Any]] = {
         "badge": "Early Pilot Active",
         "price_inr": 0,
         "duration_days": None,
-        "resume_limit": 70,
+        "resume_limit": 20,
         "export_limit": 100,
         "wiser_ai_limit": 100,
         "wiser_job_help_limit": 50,
@@ -102,7 +102,7 @@ PLAN_CONFIGS: Dict[str, Dict[str, Any]] = {
         "custom_template_limit": 30,
         "premium_templates_allowed": 999,
         "features": [
-            "70 resume workspaces",
+            "20 resume workspaces",
             "Unlimited manual editing",
             "100 exports per month",
             "50 Wiser Job Help analyses",

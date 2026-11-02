@@ -127,6 +127,17 @@ docker compose -f docker-compose.prod.yaml down
 
 ---
 
+### 5. Synchronize & Unarchive Subscription Plans (Set Pilot to 20 Workspaces)
+```bash
+# Run plan synchronization inside production container
+docker compose -f docker-compose.prod.yaml exec fastapi python -m scripts.sync_plans
+
+# Or directly with container name
+docker exec -it resumo-api python -m scripts.sync_plans
+```
+
+---
+
 ## 💻 Standalone Local Execution (Without Docker)
 
 ```bash
