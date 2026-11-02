@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 # ─── Auth Schemas ────────────────────────────────────────────────────────────
 
 class UserRegister(BaseModel):
-    name: str = Field(..., min_length=2, max_length=100)
+    name: Optional[str] = Field(None, max_length=100)
     email: EmailStr
     password: str = Field(..., min_length=6, max_length=128)
     register_token: Optional[str] = None
@@ -41,7 +41,6 @@ class UserOut(BaseModel):
 
 
 class UserPreferencesUpdate(BaseModel):
-    name: Optional[str] = None
     allow_bold_text: Optional[bool] = None
 
 

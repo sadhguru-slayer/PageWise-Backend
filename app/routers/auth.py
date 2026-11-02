@@ -1,5 +1,7 @@
 import random
 import json
+import re
+from sqlalchemy import func
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
@@ -36,6 +38,32 @@ from ..services.otp import OTPService, OTPPurpose
 from ..services.email import send_otp_email
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+
+def generate_unique_username(email: str, db: Session) -> str:
+    """
+    Generates a unique username derived from an email address.
+    If the base username already exists, appends random digits until a unique one is found.
+    """
+    local_part = email.split("@")[0].split("+")[0]
+    base_username = re.sub(r"[^a-zA-Z0-9_]", "", local_part).lower()
+    if not base_username:
+        base_username = "user"
+    base_username = base_username[:30]
+
+    existing = db.query(User).filter(func.lower(User.name) == base_username).first()
+    if not existing:
+        return base_username
+
+    for _ in range(100):
+        suffix = random.randint(1000, 9999)
+        candidate = f"{base_username}{suffix}"
+        if not db.query(User).filter(func.lower(User.name) == candidate).first():
+            return candidate
+
+    import uuid
+    return f"{base_username}_{uuid.uuid4().hex[:6]}"
+
 
 
 # ─── Registration with Anti-Spam Email Verification ──────────────────────────
@@ -122,8 +150,9 @@ def register(payload: UserRegister, db: Session = Depends(get_db)):
             )
 
     hashed_pwd = hash_password(payload.password)
+    username = generate_unique_username(normalized_email, db)
     user = User(
-        name=payload.name.strip(),
+        name=username,
         email=normalized_email,
         hashed_password=hashed_pwd,
     )
@@ -255,16 +284,13 @@ def update_preferences(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Updates user studio preferences (such as allow_bold_text) and full name."""
+    """Updates user studio preferences (such as allow_bold_text)."""
     existing_prefs = {}
     if current_user.preferences_json:
         try:
             existing_prefs = json.loads(current_user.preferences_json)
         except Exception:
             existing_prefs = {}
-
-    if payload.name:
-        current_user.name = payload.name.strip()
 
     if payload.allow_bold_text is not None:
         existing_prefs["allow_bold_text"] = bool(payload.allow_bold_text)
@@ -277,6 +303,7 @@ def update_preferences(
         id=current_user.id,
         name=current_user.name,
         email=current_user.email,
+        is_admin=bool(current_user.is_admin),
         preferences_json=existing_prefs,
         created_at=current_user.created_at,
     )
