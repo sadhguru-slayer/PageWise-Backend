@@ -329,6 +329,8 @@ def create_user(
             sub.expires_at = datetime.utcnow() + timedelta(days=1)
         elif payload.plan_type == PlanType.PRO_MONTHLY:
             sub.expires_at = datetime.utcnow() + timedelta(days=30)
+        else:
+            sub.expires_at = None
         db.commit()
 
     return {
@@ -376,7 +378,7 @@ def update_user(
             sub.expires_at = datetime.utcnow() + timedelta(days=1)
         elif payload.plan_type == PlanType.PRO_MONTHLY:
             sub.expires_at = datetime.utcnow() + timedelta(days=30)
-        elif payload.plan_type == PlanType.FREE:
+        else:
             sub.expires_at = None
 
     db.commit()
@@ -517,7 +519,7 @@ def get_admin_insights(
     # Plan distribution
     subs = db.query(Subscription.plan_type, func.count(Subscription.id)).group_by(Subscription.plan_type).all()
     active_plans = {p[0]: p[1] for p in subs}
-    for p in [PlanType.FREE, PlanType.DAY_PASS, PlanType.PRO_MONTHLY]:
+    for p in [PlanType.FREE, PlanType.DAY_PASS, PlanType.PRO_MONTHLY, PlanType.PILOT]:
         if p not in active_plans:
             active_plans[p] = 0
 
@@ -734,6 +736,7 @@ def admin_list_tiers(
             "premium_templates_allowed": t.premium_templates_allowed,
             "features": features,
             "is_active": t.is_active,
+            "is_archived": getattr(t, "is_archived", False),
             "display_order": t.display_order,
         })
     return out
@@ -785,6 +788,8 @@ def admin_update_tier(
         tier.features_json = json.dumps(payload.features)
     if payload.is_active is not None:
         tier.is_active = payload.is_active
+    if payload.is_archived is not None:
+        tier.is_archived = payload.is_archived
     if payload.display_order is not None:
         tier.display_order = payload.display_order
 
@@ -798,3 +803,116 @@ def admin_update_tier(
         "tier_key": tier.tier_key,
         "price_inr": tier.discount_price_inr if tier.discount_price_inr is not None else tier.base_price_inr,
     }
+
+
+@router.post("/apply-pilot-all")
+def apply_pilot_all(
+    archive_others: bool = Query(True, description="Archive all non-pilot tiers to hide paid checkouts"),
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Activates pilot mode:
+    1. Ensures PILOT tier exists in PlanTierConfig (and unarchived + active).
+    2. Archives all other tiers (free, day_pass, pro_monthly) if archive_others=True.
+    3. Migrates all non-admin users to PILOT tier.
+    """
+    pilot_tier = db.query(PlanTierConfig).filter(PlanTierConfig.tier_key == PlanType.PILOT).first()
+    pilot_cfg = PLAN_CONFIGS[PlanType.PILOT]
+
+    if not pilot_tier:
+        pilot_tier = PlanTierConfig(
+            tier_key=PlanType.PILOT,
+            name=pilot_cfg["name"],
+            tagline=pilot_cfg["tagline"],
+            badge=pilot_cfg["badge"],
+            base_price_inr=pilot_cfg["price_inr"],
+            discount_price_inr=pilot_cfg["price_inr"],
+            discount_percent=0,
+            billing_period_text="Pilot Program (Free)",
+            duration_days=None,
+            resume_limit=pilot_cfg["resume_limit"],
+            export_limit=pilot_cfg["export_limit"],
+            wiser_ai_limit=pilot_cfg["wiser_ai_limit"],
+            wiser_job_help_limit=pilot_cfg["wiser_job_help_limit"],
+            wiser_ats_limit=pilot_cfg["wiser_ats_limit"],
+            custom_template_limit=pilot_cfg["custom_template_limit"],
+            premium_templates_allowed=pilot_cfg["premium_templates_allowed"],
+            features_json=json.dumps(pilot_cfg["features"]),
+            is_active=True,
+            is_archived=False,
+            display_order=0,
+        )
+        db.add(pilot_tier)
+    else:
+        pilot_tier.is_active = True
+        pilot_tier.is_archived = False
+        pilot_tier.resume_limit = pilot_cfg["resume_limit"]
+        pilot_tier.export_limit = pilot_cfg["export_limit"]
+        pilot_tier.wiser_ai_limit = pilot_cfg["wiser_ai_limit"]
+        pilot_tier.wiser_job_help_limit = pilot_cfg["wiser_job_help_limit"]
+        pilot_tier.wiser_ats_limit = pilot_cfg["wiser_ats_limit"]
+        pilot_tier.custom_template_limit = pilot_cfg["custom_template_limit"]
+        pilot_tier.premium_templates_allowed = pilot_cfg["premium_templates_allowed"]
+
+    # Archive other tiers if requested
+    if archive_others:
+        other_tiers = db.query(PlanTierConfig).filter(PlanTierConfig.tier_key != PlanType.PILOT).all()
+        for ot in other_tiers:
+            ot.is_archived = True
+
+    # Migrate all non-admin users to pilot
+    non_admins = db.query(User).filter(User.is_admin == False).all()
+    migrated_count = 0
+    for u in non_admins:
+        sub = get_or_create_subscription(db, u.id)
+        sub.plan_type = PlanType.PILOT
+        sub.status = "active"
+        sub.expires_at = None
+        migrated_count += 1
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Successfully activated Pilot Mode! Migrated {migrated_count} non-admin user(s) to Pilot tier.",
+        "migrated_users_count": migrated_count,
+        "pilot_tier": {
+            "tier_key": pilot_tier.tier_key,
+            "name": pilot_tier.name,
+            "resume_limit": pilot_tier.resume_limit,
+            "export_limit": pilot_tier.export_limit,
+            "wiser_job_help_limit": pilot_tier.wiser_job_help_limit,
+            "wiser_ats_limit": pilot_tier.wiser_ats_limit,
+            "custom_template_limit": pilot_tier.custom_template_limit,
+        }
+    }
+
+
+@router.post("/users/bulk-plan")
+def bulk_update_user_plan(
+    user_ids: List[int],
+    plan_type: str,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Bulk updates subscription tier for selected user accounts."""
+    if plan_type not in PLAN_CONFIGS:
+        raise HTTPException(status_code=400, detail=f"Invalid plan type '{plan_type}'")
+
+    updated = 0
+    for uid in user_ids:
+        u = db.query(User).filter(User.id == uid).first()
+        if u and not u.is_admin:
+            sub = get_or_create_subscription(db, u.id)
+            sub.plan_type = plan_type
+            sub.status = "active"
+            if plan_type == PlanType.DAY_PASS:
+                sub.expires_at = datetime.utcnow() + timedelta(days=1)
+            elif plan_type == PlanType.PRO_MONTHLY:
+                sub.expires_at = datetime.utcnow() + timedelta(days=30)
+            else:
+                sub.expires_at = None
+            updated += 1
+
+    db.commit()
+    return {"success": True, "updated_count": updated, "plan_type": plan_type}

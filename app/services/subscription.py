@@ -86,6 +86,32 @@ PLAN_CONFIGS: Dict[str, Dict[str, Any]] = {
             "Resume version management",
             "All export formats"
         ]
+    },
+    PlanType.PILOT: {
+        "id": PlanType.PILOT,
+        "name": "PageWise Pilot",
+        "tagline": "All premium capabilities unlocked during our early pilot program",
+        "badge": "Early Pilot Active",
+        "price_inr": 0,
+        "duration_days": None,
+        "resume_limit": 70,
+        "export_limit": 100,
+        "wiser_ai_limit": 100,
+        "wiser_job_help_limit": 50,
+        "wiser_ats_limit": 50,
+        "custom_template_limit": 30,
+        "premium_templates_allowed": 999,
+        "features": [
+            "70 resume workspaces",
+            "Unlimited manual editing",
+            "100 exports per month",
+            "50 Wiser Job Help analyses",
+            "50 Wiser ATS evaluations",
+            "30 custom templates",
+            "All premium layout architectures unlocked",
+            "AI improvement suggestions and instant application",
+            "Early Pilot Access (No payment required)"
+        ]
     }
 }
 
@@ -93,6 +119,7 @@ TIER_LEVELS = {
     PlanType.FREE: 0,
     PlanType.DAY_PASS: 1,
     PlanType.PRO_MONTHLY: 2,
+    PlanType.PILOT: 3,
 }
 
 
@@ -101,7 +128,7 @@ def get_tier_config(db: Session, tier_key: str) -> Dict[str, Any]:
     try:
         record = (
             db.query(PlanTierConfig)
-            .filter(PlanTierConfig.tier_key == tier_key, PlanTierConfig.is_active == True)
+            .filter(PlanTierConfig.tier_key == tier_key)
             .first()
         )
         if record:
@@ -126,6 +153,8 @@ def get_tier_config(db: Session, tier_key: str) -> Dict[str, Any]:
                 "custom_template_limit": record.custom_template_limit,
                 "premium_templates_allowed": record.premium_templates_allowed,
                 "features": features,
+                "is_active": record.is_active,
+                "is_archived": getattr(record, "is_archived", False),
             }
     except Exception as e:
         print("[get_tier_config] Error loading dynamic tier from DB:", e)
@@ -161,13 +190,29 @@ def enforce_template_access(db: Session, user: User, template_id_or_key: Any):
 
 
 
+def get_default_plan_type(db: Session) -> str:
+    """Determines default plan type: defaults to PILOT if active and unarchived, else FREE."""
+    try:
+        pilot = db.query(PlanTierConfig).filter(
+            PlanTierConfig.tier_key == PlanType.PILOT,
+            PlanTierConfig.is_active == True,
+            PlanTierConfig.is_archived == False
+        ).first()
+        if pilot:
+            return PlanType.PILOT
+    except Exception:
+        pass
+    return PlanType.FREE
+
+
 def get_or_create_subscription(db: Session, user_id: int) -> Subscription:
-    """Retrieves the user's subscription record or creates a default Free one."""
+    """Retrieves the user's subscription record or creates a default one (Pilot if active, else Free)."""
     sub = db.query(Subscription).filter(Subscription.user_id == user_id).first()
     if not sub:
+        default_plan = get_default_plan_type(db)
         sub = Subscription(
             user_id=user_id,
-            plan_type=PlanType.FREE,
+            plan_type=default_plan,
             status="active",
             started_at=datetime.utcnow(),
             expires_at=None,
@@ -185,13 +230,13 @@ def get_or_create_subscription(db: Session, user_id: int) -> Subscription:
         now = datetime.utcnow()
         if sub.expires_at and now > sub.expires_at and sub.status == "active":
             sub.status = "expired"
-            sub.plan_type = PlanType.FREE
+            sub.plan_type = get_default_plan_type(db)
             sub.expires_at = None
             db.commit()
             db.refresh(sub)
 
-        # Check calendar month reset for Free tier
-        if sub.plan_type == PlanType.FREE and sub.period_reset_at:
+        # Check calendar month reset for Free or Pilot tier
+        if sub.plan_type in [PlanType.FREE, PlanType.PILOT] and sub.period_reset_at:
             if (now.year > sub.period_reset_at.year) or (now.month > sub.period_reset_at.month):
                 sub.exports_used_in_period = 0
                 sub.wiser_job_help_used = 0

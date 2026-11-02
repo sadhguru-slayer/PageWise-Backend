@@ -46,10 +46,10 @@ def get_payment_config(db: Session = Depends(get_db)):
 
 @router.get("/plans")
 def list_active_plans(db: Session = Depends(get_db)):
-    """Returns active subscription plans configured by admin."""
+    """Returns active, published subscription plans configured by admin (excludes archived)."""
     tiers = (
         db.query(PlanTierConfig)
-        .filter(PlanTierConfig.is_active == True)
+        .filter(PlanTierConfig.is_active == True, PlanTierConfig.is_archived == False)
         .order_by(PlanTierConfig.display_order.asc())
         .all()
     )
@@ -74,6 +74,7 @@ def list_active_plans(db: Session = Depends(get_db)):
                 "premium_templates_allowed": v.get("premium_templates_allowed", 1),
                 "features": v.get("features", []),
                 "is_active": True,
+                "is_archived": False,
                 "display_order": 0,
             }
             for k, v in PLAN_CONFIGS.items()
@@ -107,6 +108,7 @@ def list_active_plans(db: Session = Depends(get_db)):
             "premium_templates_allowed": t.premium_templates_allowed,
             "features": features,
             "is_active": t.is_active,
+            "is_archived": getattr(t, "is_archived", False),
             "display_order": t.display_order,
         })
     return out
@@ -132,6 +134,11 @@ def create_payment_order(
     Also supports sandbox/mock order creation if keys are running in initial test setup.
     """
     plan_info = get_tier_config(db, payload.plan_type)
+    if plan_info.get("is_archived"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Plan '{payload.plan_type}' is currently archived and unavailable for purchase."
+        )
     effective_price = plan_info.get("discount_price_inr")
     if effective_price is None:
         effective_price = plan_info.get("price_inr", 0)

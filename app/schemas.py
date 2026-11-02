@@ -266,6 +266,7 @@ class PlanTierConfigOut(BaseModel):
     premium_templates_allowed: int
     features: List[str] = []
     is_active: bool
+    is_archived: bool = False
     display_order: int
 
     class Config:
@@ -290,6 +291,7 @@ class PlanTierConfigUpdate(BaseModel):
     premium_templates_allowed: Optional[int] = None
     features: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    is_archived: Optional[bool] = None
     display_order: Optional[int] = None
 
 

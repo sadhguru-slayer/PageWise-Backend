@@ -153,6 +153,7 @@ class PlanType:
     FREE = "free"
     DAY_PASS = "day_pass"
     PRO_MONTHLY = "pro_monthly"
+    PILOT = "pilot"
 
 
 class Subscription(Base):
@@ -246,6 +247,7 @@ class PlanTierConfig(Base):
     features_json = Column(Text, default="[]", nullable=False)
 
     is_active = Column(Boolean, default=True, nullable=False)
+    is_archived = Column(Boolean, default=False, nullable=False)
     display_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
