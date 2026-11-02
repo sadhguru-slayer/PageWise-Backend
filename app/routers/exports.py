@@ -11,7 +11,7 @@ from ..models import ExportedResume, Resume, User
 from ..schemas import ExportPDFRequest, ExportImageRequest, ExportHTMLRequest, ExportDocxRequest, ExportedResumeOut
 from ..auth import get_current_user, get_user_from_token, security
 from ..export_service import generate_pdf_from_html, generate_image_from_html, generate_html_file, generate_docx_from_resume_data
-from ..services.subscription import enforce_export_limit, increment_export_usage
+from ..services.subscription import enforce_export_limit, increment_export_usage, require_export_quota
 
 router = APIRouter(prefix="/api/exports", tags=["Exports"])
 
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/exports", tags=["Exports"])
 @router.post("/pdf", response_model=ExportedResumeOut, status_code=status.HTTP_201_CREATED)
 async def export_pdf(
     payload: ExportPDFRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_export_quota),
     db: Session = Depends(get_db)
 ):
     """
@@ -79,7 +79,7 @@ async def export_pdf(
 @router.post("/image", response_model=ExportedResumeOut, status_code=status.HTTP_201_CREATED)
 async def export_image(
     payload: ExportImageRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_export_quota),
     db: Session = Depends(get_db)
 ):
     """
@@ -137,7 +137,7 @@ async def export_image(
 @router.post("/html", response_model=ExportedResumeOut, status_code=status.HTTP_201_CREATED)
 async def export_html(
     payload: ExportHTMLRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_export_quota),
     db: Session = Depends(get_db)
 ):
     """
@@ -195,7 +195,7 @@ async def export_html(
 @router.post("/docx", response_model=ExportedResumeOut, status_code=status.HTTP_201_CREATED)
 def export_docx(
     payload: ExportDocxRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_export_quota),
     db: Session = Depends(get_db)
 ):
     """

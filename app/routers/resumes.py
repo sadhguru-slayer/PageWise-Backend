@@ -15,9 +15,14 @@ from ..auth import get_current_user
 from ..services.subscription import (
     enforce_resume_limit,
     enforce_wiser_ai_limit,
+    enforce_template_limit,
     increment_wiser_ai_usage,
     get_user_active_workspace_ids,
     enforce_resume_edit_permission,
+    require_resume_quota,
+    require_template_quota,
+    require_wiser_job_help_quota,
+    require_wiser_ats_quota,
 )
 
 router = APIRouter(prefix="/api/resumes", tags=["Resumes"])
@@ -85,7 +90,7 @@ def list_resumes(
 @router.post("", response_model=ResumeDetail, status_code=status.HTTP_201_CREATED)
 def create_resume(
     payload: ResumeCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_resume_quota),
     db: Session = Depends(get_db)
 ):
     """Creates a new resume for the currently authenticated user."""
@@ -363,8 +368,10 @@ def update_resume(
 
 
 @router.post("/{resume_id}/set-primary", response_model=ResumeDetail)
+@router.put("/{resume_id}/set-primary", response_model=ResumeDetail)
 def set_primary_resume(
     resume_id: int,
+    payload: Optional[dict] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -534,7 +541,7 @@ async def parse_pdf_resume(
 @router.post("/analyze-jd")
 def analyze_job_description(
     payload: JDAnalyzeRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_wiser_job_help_quota),
     db: Session = Depends(get_db)
 ):
     """
@@ -672,7 +679,7 @@ def analyze_job_description(
 @router.post("/analyze-ats")
 def analyze_standalone_resume_ats(
     payload: ATSAnalyzeRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_wiser_ats_quota),
     db: Session = Depends(get_db)
 ):
     """
@@ -784,7 +791,7 @@ def analyze_standalone_resume_ats(
 def clone_resume(
     resume_id: int,
     payload: ResumeCloneRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_resume_quota),
     db: Session = Depends(get_db)
 ):
     """
@@ -872,10 +879,11 @@ def list_templates(
 @templates_router.post("", response_model=TemplateOut, status_code=status.HTTP_201_CREATED)
 def save_template(
     payload: TemplateCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_template_quota),
     db: Session = Depends(get_db)
 ):
     """Saves the current resume's style as a reusable named template."""
+    enforce_template_limit(db, current_user)
     tmpl = ResumeTemplate(
         user_id=current_user.id,
         name=payload.name,

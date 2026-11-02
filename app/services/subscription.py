@@ -1,9 +1,15 @@
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, Any, Tuple
 from sqlalchemy.orm import Session
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends
 
+from ..database import get_db
+from ..auth import get_current_user
 from ..models import User, Subscription, PlanType, Resume, ResumeTemplate, ExportedResume, AIUsageLog
+
+# Thread-safe re-entrant lock for concurrency-safe quota evaluations and atomic counter updates
+quota_lock = threading.RLock()
 
 
 # ─── Plan Definitions ────────────────────────────────────────────────────────
@@ -235,71 +241,138 @@ def enforce_resume_edit_permission(db: Session, user: User, resume_id: int):
 
 def enforce_resume_limit(db: Session, user: User):
     """Enforces active resume limits before creating or cloning a resume."""
-    status_info = get_user_plan_status(db, user)
-    limit = status_info["limits"]["resumes"]
-    current_count = status_info["usage"]["active_resumes"]
+    with quota_lock:
+        status_info = get_user_plan_status(db, user)
+        limit = status_info["limits"]["resumes"]
+        current_count = status_info["usage"]["active_resumes"]
 
-    if current_count >= limit:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=f"Plan limit reached: {status_info['plan_name']} allows up to {limit} resume workspace(s). Please upgrade your plan to add more."
-        )
+        if current_count >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Plan limit reached: {status_info['plan_name']} allows up to {limit} resume workspace(s). Please upgrade your plan to add more."
+            )
+
+
+def enforce_template_limit(db: Session, user: User):
+    """Enforces custom template limits before saving a custom template."""
+    with quota_lock:
+        status_info = get_user_plan_status(db, user)
+        limit = status_info["limits"]["custom_templates"]
+        current_count = status_info["usage"]["custom_templates_count"]
+
+        if current_count >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Template limit reached: {status_info['plan_name']} allows up to {limit} custom template(s). Please upgrade your plan to save more templates."
+            )
 
 
 def enforce_export_limit(db: Session, user: User):
     """Enforces export limits before generating PDF, DOCX, PNG, HTML."""
-    status_info = get_user_plan_status(db, user)
-    limit = status_info["limits"]["exports"]
-    used = status_info["usage"]["exports_used"]
+    with quota_lock:
+        status_info = get_user_plan_status(db, user)
+        limit = status_info["limits"]["exports"]
+        used = status_info["usage"]["exports_used"]
 
-    if used >= limit:
-        raise HTTPException(
-            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-            detail=f"Export allowance reached: {status_info['plan_name']} allows {limit} export(s). Please upgrade to Wiser Day Pass or Pagewise Pro."
-        )
+        if used >= limit:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"Export allowance reached: {status_info['plan_name']} allows {limit} export(s). Please upgrade to Wiser Day Pass or Pagewise Pro."
+            )
 
 
 def increment_export_usage(db: Session, user: User):
     """Increments the export usage counter for the user."""
-    sub = get_or_create_subscription(db, user.id)
-    sub.exports_used_in_period = (sub.exports_used_in_period or 0) + 1
-    db.commit()
+    with quota_lock:
+        sub = get_or_create_subscription(db, user.id)
+        sub.exports_used_in_period = (sub.exports_used_in_period or 0) + 1
+        db.commit()
 
 
 def enforce_wiser_ai_limit(db: Session, user: User, action_type: str = "wiser_job_help"):
     """Enforces Wiser AI limits (Job Help vs ATS check)."""
-    sub = get_or_create_subscription(db, user.id)
-    plan_config = PLAN_CONFIGS.get(sub.plan_type, PLAN_CONFIGS[PlanType.FREE])
+    with quota_lock:
+        sub = get_or_create_subscription(db, user.id)
+        plan_config = PLAN_CONFIGS.get(sub.plan_type, PLAN_CONFIGS[PlanType.FREE])
 
-    if sub.plan_type == PlanType.FREE:
-        # Free tier: 1 combined evaluation allowance covering both Job Help and ATS
-        combined = (sub.wiser_job_help_used or 0) + (sub.wiser_ats_used or 0)
-        if combined >= plan_config["wiser_ai_limit"]:
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Wiser AI evaluation allowance reached for Pagewise Free (1 evaluation). Upgrade to Wiser Day Pass or Pagewise Pro for more."
-            )
-    else:
-        # Tiered limits
-        if action_type == "wiser_job_help":
-            if (sub.wiser_job_help_used or 0) >= plan_config["wiser_job_help_limit"]:
+        if sub.plan_type == PlanType.FREE:
+            # Free tier: 1 combined evaluation allowance covering both Job Help and ATS
+            combined = (sub.wiser_job_help_used or 0) + (sub.wiser_ats_used or 0)
+            if combined >= plan_config["wiser_ai_limit"]:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail=f"Wiser Job Help allowance of {plan_config['wiser_job_help_limit']} reached. Upgrade to Pagewise Pro for 15 evaluations."
+                    detail="Wiser AI evaluation allowance reached for Pagewise Free (1 evaluation). Upgrade to Wiser Day Pass or Pagewise Pro for more."
                 )
-        elif action_type == "wiser_ats_check":
-            if (sub.wiser_ats_used or 0) >= plan_config["wiser_ats_limit"]:
-                raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail=f"Wiser ATS allowance of {plan_config['wiser_ats_limit']} reached. Upgrade to Pagewise Pro for 15 evaluations."
-                )
+        else:
+            # Tiered limits
+            if action_type == "wiser_job_help":
+                if (sub.wiser_job_help_used or 0) >= plan_config["wiser_job_help_limit"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail=f"Wiser Job Help allowance of {plan_config['wiser_job_help_limit']} reached. Upgrade to Pagewise Pro for 15 evaluations."
+                    )
+            elif action_type == "wiser_ats_check":
+                if (sub.wiser_ats_used or 0) >= plan_config["wiser_ats_limit"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail=f"Wiser ATS allowance of {plan_config['wiser_ats_limit']} reached. Upgrade to Pagewise Pro for 15 evaluations."
+                    )
 
 
 def increment_wiser_ai_usage(db: Session, user: User, action_type: str = "wiser_job_help"):
     """Increments the specific Wiser AI usage counter for the user."""
-    sub = get_or_create_subscription(db, user.id)
-    if action_type == "wiser_job_help":
-        sub.wiser_job_help_used = (sub.wiser_job_help_used or 0) + 1
-    elif action_type == "wiser_ats_check":
-        sub.wiser_ats_used = (sub.wiser_ats_used or 0) + 1
-    db.commit()
+    with quota_lock:
+        sub = get_or_create_subscription(db, user.id)
+        if action_type == "wiser_job_help":
+            sub.wiser_job_help_used = (sub.wiser_job_help_used or 0) + 1
+        elif action_type == "wiser_ats_check":
+            sub.wiser_ats_used = (sub.wiser_ats_used or 0) + 1
+        db.commit()
+
+
+# ─── Fast FastAPI Dependency Guards ──────────────────────────────────────────
+
+def require_resume_quota(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """FastAPI Dependency: verifies active resume workspace limits before request body processing."""
+    enforce_resume_limit(db, current_user)
+    return current_user
+
+
+def require_export_quota(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """FastAPI Dependency: verifies export allowance limits upfront before heavy file generation."""
+    enforce_export_limit(db, current_user)
+    return current_user
+
+
+def require_template_quota(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """FastAPI Dependency: verifies custom template limits before saving."""
+    enforce_template_limit(db, current_user)
+    return current_user
+
+
+def require_wiser_job_help_quota(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """FastAPI Dependency: verifies Wiser Job Help quota before AI generation."""
+    enforce_wiser_ai_limit(db, current_user, action_type="wiser_job_help")
+    return current_user
+
+
+def require_wiser_ats_quota(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> User:
+    """FastAPI Dependency: verifies Wiser ATS evaluation quota before AI analysis."""
+    enforce_wiser_ai_limit(db, current_user, action_type="wiser_ats_check")
+    return current_user
+
