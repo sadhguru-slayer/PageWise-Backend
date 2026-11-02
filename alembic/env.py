@@ -13,7 +13,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.config import DATABASE_URL
 from app.database import Base
 # Import all models to register them on Base.metadata
-from app.models import User, Resume, ResumeTemplate, ExportedResume, AIUsageLog
+from app.models import (
+    User, Resume, ResumeTemplate, ExportedResume, AIUsageLog,
+    Subscription, PaymentOrder, PlanTierConfig
+)
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -23,12 +26,13 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Set database URL dynamically from environment configuration
-db_url = DATABASE_URL
-if db_url.startswith("postgresql://"):
-    db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-
-config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
+# Set database URL dynamically from environment configuration if not explicitly provided
+custom_url = config.get_main_option("sqlalchemy.url")
+if not custom_url or custom_url.startswith("driver://") or "dummy" in custom_url:
+    db_url = DATABASE_URL
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg2://", 1)
+    config.set_main_option("sqlalchemy.url", db_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 

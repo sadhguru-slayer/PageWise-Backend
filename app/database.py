@@ -42,6 +42,32 @@ def run_auto_migrations():
                 if "is_primary" not in resume_cols:
                     conn.execute(text("ALTER TABLE resumes ADD COLUMN is_primary BOOLEAN DEFAULT 0 NOT NULL"))
 
+            # Resume templates additions
+            if "resume_templates" in existing_tables:
+                tmpl_cols = [c["name"] for c in inspector.get_columns("resume_templates")]
+                if "template_key" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN template_key VARCHAR(100) NULL"))
+                if "is_global" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN is_global BOOLEAN DEFAULT 0 NOT NULL"))
+                if "min_plan_tier" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN min_plan_tier VARCHAR(50) DEFAULT 'free' NOT NULL"))
+                if "badge" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN badge VARCHAR(100) NULL"))
+                if "category" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN category VARCHAR(255) NULL"))
+                if "preview_thumbnail" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN preview_thumbnail VARCHAR(255) NULL"))
+                if "display_order" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN display_order INTEGER DEFAULT 0 NOT NULL"))
+                if "is_active" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL"))
+
+            # Plan tier configs additions
+            if "plan_tier_configs" in existing_tables:
+                plan_cols = [c["name"] for c in inspector.get_columns("plan_tier_configs")]
+                if "is_archived" not in plan_cols:
+                    conn.execute(text("ALTER TABLE plan_tier_configs ADD COLUMN is_archived BOOLEAN DEFAULT 0 NOT NULL"))
+
             # Soft deletes
             for table in ["resumes", "resume_templates", "exported_resumes"]:
                 if table in existing_tables:
