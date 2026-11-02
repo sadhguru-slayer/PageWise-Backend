@@ -123,6 +123,45 @@ def get_current_plan_status(
     return get_user_plan_status(db, current_user)
 
 
+@router.get("/history")
+def get_user_payment_history(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns the purchase and billing ledger for the authenticated user,
+    including invoices, transaction IDs, amounts, and statuses.
+    """
+    orders = (
+        db.query(PaymentOrder)
+        .filter(PaymentOrder.user_id == current_user.id)
+        .order_by(PaymentOrder.created_at.desc())
+        .all()
+    )
+
+    history = []
+    for o in orders:
+        plan_info = get_tier_config(db, o.plan_type)
+        history.append({
+            "id": o.id,
+            "order_id": o.razorpay_order_id,
+            "payment_id": o.razorpay_payment_id,
+            "plan_type": o.plan_type,
+            "plan_name": plan_info.get("name", o.plan_type.replace("_", " ").title()),
+            "amount_inr": o.amount_inr,
+            "currency": o.currency or "INR",
+            "status": o.status,
+            "receipt": o.receipt,
+            "error_message": o.error_message,
+            "created_at": o.created_at.isoformat() if o.created_at else None,
+            "invoice_number": f"INV-{o.created_at.strftime('%Y%m') if o.created_at else '202611'}-{o.id:04d}",
+            "billing_period_text": plan_info.get("billing_period_text", ""),
+            "duration_days": plan_info.get("duration_days"),
+        })
+
+    return history
+
+
 @router.post("/create-order")
 def create_payment_order(
     payload: CreateOrderRequest,
