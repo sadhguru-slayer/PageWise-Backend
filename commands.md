@@ -27,6 +27,7 @@ docker compose down
 
 > **Note:** Alembic runs on an isolated migration profile. It is **never built or run automatically** on default `docker compose up`. It runs solely on-demand and terminates immediately upon completion.
 
+
 ### 1. Generate a New Autodetected Migration
 ```bash
 # Development
@@ -35,6 +36,8 @@ docker compose --profile migration run --rm alembic alembic revision --autogener
 # Production
 docker compose -f docker-compose.prod.yaml --profile migration run --rm alembic alembic revision --autogenerate -m "add_new_feature_columns"
 ```
+<!-- Migration apply -->
+docker compose -f docker-compose.prod.yaml --profile migration run --rm alembic
 
 ### 2. Apply Migrations (Upgrade Head)
 ```bash

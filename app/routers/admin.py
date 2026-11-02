@@ -1,3 +1,4 @@
+from pydantic import BaseModel
 from datetime import datetime, timedelta
 import json
 from typing import List, Optional
@@ -1110,3 +1111,440 @@ def delete_feedback(
     db.commit()
     return {"success": True, "deleted_id": feedback_id}
 
+
+
+# ─── Commerce: Finances, Orders, and Subscriptions ───────────────────────────
+
+class AdminSubscriptionUpdatePayload(BaseModel):
+    plan_type: Optional[str] = None
+    status: Optional[str] = None
+    extend_days: Optional[int] = None
+    reset_quotas: Optional[bool] = False
+
+
+@router.get("/finances")
+def get_admin_finances(
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns comprehensive financial telemetry:
+    - Total Gross Revenue (All time, 30-day, 7-day, 24-hour)
+    - Order volume and success/failure conversion rates
+    - Revenue breakdown by plan tier
+    - Recent transactions list
+    """
+    now = datetime.utcnow()
+    day_ago = now - timedelta(days=1)
+    seven_days_ago = now - timedelta(days=7)
+    thirty_days_ago = now - timedelta(days=30)
+
+    total_rev = db.query(func.coalesce(func.sum(PaymentOrder.amount_inr), 0)).filter(
+        PaymentOrder.status == "paid"
+    ).scalar() or 0
+
+    rev_30d = db.query(func.coalesce(func.sum(PaymentOrder.amount_inr), 0)).filter(
+        PaymentOrder.status == "paid",
+        PaymentOrder.created_at >= thirty_days_ago
+    ).scalar() or 0
+
+    rev_7d = db.query(func.coalesce(func.sum(PaymentOrder.amount_inr), 0)).filter(
+        PaymentOrder.status == "paid",
+        PaymentOrder.created_at >= seven_days_ago
+    ).scalar() or 0
+
+    rev_24h = db.query(func.coalesce(func.sum(PaymentOrder.amount_inr), 0)).filter(
+        PaymentOrder.status == "paid",
+        PaymentOrder.created_at >= day_ago
+    ).scalar() or 0
+
+    total_orders = db.query(PaymentOrder).count()
+    paid_orders = db.query(PaymentOrder).filter(PaymentOrder.status == "paid").count()
+    failed_orders = db.query(PaymentOrder).filter(PaymentOrder.status == "failed").count()
+    created_orders = db.query(PaymentOrder).filter(PaymentOrder.status == "created").count()
+
+    avg_order_val = round(total_rev / paid_orders, 2) if paid_orders else 0.0
+
+    tier_stats = db.query(
+        PaymentOrder.plan_type,
+        func.count(PaymentOrder.id).label("count"),
+        func.coalesce(func.sum(PaymentOrder.amount_inr), 0).label("revenue")
+    ).filter(
+        PaymentOrder.status == "paid"
+    ).group_by(PaymentOrder.plan_type).all()
+
+    by_plan = {}
+    for p, c, r in tier_stats:
+        by_plan[p] = {"count": c, "revenue": r}
+
+    recent = (
+        db.query(PaymentOrder, User.name, User.email)
+        .outerjoin(User, PaymentOrder.user_id == User.id)
+        .order_by(PaymentOrder.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    recent_transactions = []
+    for order, u_name, u_email in recent:
+        recent_transactions.append({
+            "id": order.id,
+            "user_id": order.user_id,
+            "user_name": u_name or "Anonymous",
+            "user_email": u_email or "N/A",
+            "plan_type": order.plan_type,
+            "amount_inr": order.amount_inr,
+            "currency": order.currency,
+            "status": order.status,
+            "razorpay_order_id": order.razorpay_order_id,
+            "razorpay_payment_id": order.razorpay_payment_id,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+        })
+
+    return {
+        "total_revenue_inr": total_rev,
+        "revenue_30d_inr": rev_30d,
+        "revenue_7d_inr": rev_7d,
+        "revenue_24h_inr": rev_24h,
+        "total_orders": total_orders,
+        "paid_orders": paid_orders,
+        "failed_orders": failed_orders,
+        "created_orders": created_orders,
+        "average_order_value_inr": avg_order_val,
+        "conversion_rate": round((paid_orders / total_orders * 100), 1) if total_orders else 0.0,
+        "by_plan": by_plan,
+        "recent_transactions": recent_transactions,
+    }
+
+
+@router.get("/orders")
+def get_admin_orders(
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    status: Optional[str] = Query(None),
+    plan_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Paginated model-ledger of all customer payment orders with search and filtering.
+    """
+    q = db.query(PaymentOrder, User.name, User.email).outerjoin(User, PaymentOrder.user_id == User.id)
+
+    if status and status != "all":
+        q = q.filter(PaymentOrder.status == status.strip().lower())
+
+    if plan_type and plan_type != "all":
+        q = q.filter(PaymentOrder.plan_type == plan_type.strip().lower())
+
+    if search:
+        s = f"%{search.strip().lower()}%"
+        q = q.filter(
+            (func.lower(User.email).like(s))
+            | (func.lower(User.name).like(s))
+            | (func.lower(PaymentOrder.razorpay_order_id).like(s))
+            | (func.lower(PaymentOrder.razorpay_payment_id).like(s))
+        )
+
+    total = q.count()
+    offset = (page - 1) * limit
+    results = q.order_by(PaymentOrder.created_at.desc()).offset(offset).limit(limit).all()
+
+    orders_out = []
+    for order, u_name, u_email in results:
+        orders_out.append({
+            "id": order.id,
+            "user_id": order.user_id,
+            "user_name": u_name or "Unknown",
+            "user_email": u_email or "N/A",
+            "plan_type": order.plan_type,
+            "amount_inr": order.amount_inr,
+            "currency": order.currency,
+            "status": order.status,
+            "razorpay_order_id": order.razorpay_order_id,
+            "razorpay_payment_id": order.razorpay_payment_id,
+            "receipt": order.receipt,
+            "error_message": order.error_message,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+        })
+
+    paid_sum = db.query(func.coalesce(func.sum(PaymentOrder.amount_inr), 0)).filter(
+        PaymentOrder.status == "paid"
+    ).scalar() or 0
+
+    return {
+        "orders": orders_out,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, (total + limit - 1) // limit),
+        "total_paid_inr": paid_sum,
+    }
+
+
+@router.get("/orders/{order_id}")
+def get_admin_order_detail(
+    order_id: int,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Detailed metadata view of an individual payment order."""
+    res = (
+        db.query(PaymentOrder, User.name, User.email)
+        .outerjoin(User, PaymentOrder.user_id == User.id)
+        .filter(PaymentOrder.id == order_id)
+        .first()
+    )
+    if not res:
+        raise HTTPException(status_code=404, detail="Order not found")
+    order, u_name, u_email = res
+    return {
+        "id": order.id,
+        "user_id": order.user_id,
+        "user_name": u_name,
+        "user_email": u_email,
+        "plan_type": order.plan_type,
+        "amount_inr": order.amount_inr,
+        "currency": order.currency,
+        "status": order.status,
+        "razorpay_order_id": order.razorpay_order_id,
+        "razorpay_payment_id": order.razorpay_payment_id,
+        "razorpay_signature": order.razorpay_signature,
+        "receipt": order.receipt,
+        "error_message": order.error_message,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+    }
+
+
+@router.get("/subscriptions")
+def get_admin_subscriptions(
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    plan_type: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Lists and filters customer subscriptions with quotas and status.
+    """
+    q = db.query(Subscription, User.name, User.email).join(User, Subscription.user_id == User.id)
+
+    if plan_type and plan_type != "all":
+        q = q.filter(Subscription.plan_type == plan_type.strip().lower())
+
+    if status and status != "all":
+        q = q.filter(Subscription.status == status.strip().lower())
+
+    if search:
+        s = f"%{search.strip().lower()}%"
+        q = q.filter((func.lower(User.email).like(s)) | (func.lower(User.name).like(s)))
+
+    total = q.count()
+    offset = (page - 1) * limit
+    results = q.order_by(Subscription.updated_at.desc()).offset(offset).limit(limit).all()
+
+    subs_out = []
+    for sub, u_name, u_email in results:
+        subs_out.append({
+            "id": sub.id,
+            "user_id": sub.user_id,
+            "user_name": u_name,
+            "user_email": u_email,
+            "plan_type": sub.plan_type,
+            "status": sub.status,
+            "started_at": sub.started_at.isoformat() if sub.started_at else None,
+            "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
+            "resumes_created_in_period": sub.resumes_created_in_period,
+            "exports_used_in_period": sub.exports_used_in_period,
+            "wiser_job_help_used": sub.wiser_job_help_used,
+            "wiser_ats_used": sub.wiser_ats_used,
+            "razorpay_payment_id": sub.razorpay_payment_id,
+            "created_at": sub.created_at.isoformat() if sub.created_at else None,
+            "updated_at": sub.updated_at.isoformat() if sub.updated_at else None,
+        })
+
+    active_count = db.query(Subscription).filter(Subscription.status == "active").count()
+    pro_count = db.query(Subscription).filter(Subscription.plan_type == "pro_monthly", Subscription.status == "active").count()
+    day_pass_count = db.query(Subscription).filter(Subscription.plan_type == "day_pass", Subscription.status == "active").count()
+    pilot_count = db.query(Subscription).filter(Subscription.plan_type == "pilot", Subscription.status == "active").count()
+
+    return {
+        "subscriptions": subs_out,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, (total + limit - 1) // limit),
+        "summary": {
+            "active_count": active_count,
+            "pro_count": pro_count,
+            "day_pass_count": day_pass_count,
+            "pilot_count": pilot_count,
+        }
+    }
+
+
+@router.put("/subscriptions/{user_id}")
+def update_admin_user_subscription(
+    user_id: int,
+    payload: AdminSubscriptionUpdatePayload,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually modifies or overrides a customer's subscription plan, expiration, or quotas.
+    """
+    sub = get_or_create_subscription(user_id, db)
+
+    if payload.plan_type:
+        sub.plan_type = payload.plan_type.strip().lower()
+
+    if payload.status:
+        sub.status = payload.status.strip().lower()
+
+    if payload.extend_days is not None and payload.extend_days > 0:
+        base_time = sub.expires_at if (sub.expires_at and sub.expires_at > datetime.utcnow()) else datetime.utcnow()
+        sub.expires_at = base_time + timedelta(days=payload.extend_days)
+        sub.status = "active"
+
+    if payload.reset_quotas:
+        sub.resumes_created_in_period = 0
+        sub.exports_used_in_period = 0
+        sub.wiser_job_help_used = 0
+        sub.wiser_ats_used = 0
+        sub.period_reset_at = datetime.utcnow()
+
+    sub.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(sub)
+
+    return {
+        "success": True,
+        "message": f"Subscription updated for user #{user_id}",
+        "subscription": {
+            "id": sub.id,
+            "user_id": sub.user_id,
+            "plan_type": sub.plan_type,
+            "status": sub.status,
+            "expires_at": sub.expires_at.isoformat() if sub.expires_at else None,
+        }
+    }
+
+
+# ─── Telemetry: AI Usage & Quotas ────────────────────────────────────────────
+
+@router.get("/ai-usage")
+def get_admin_ai_usage_logs(
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    action_type: Optional[str] = Query(None),
+    user_id: Optional[int] = Query(None),
+    search: Optional[str] = Query(None),
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Paginated audit log of all AI invocations across the platform.
+    """
+    q = db.query(AIUsageLog, User.name, User.email).join(User, AIUsageLog.user_id == User.id)
+
+    if action_type and action_type != "all":
+        q = q.filter(AIUsageLog.action_type == action_type.strip().lower())
+
+    if user_id:
+        q = q.filter(AIUsageLog.user_id == user_id)
+
+    if search:
+        s = f"%{search.strip().lower()}%"
+        q = q.filter((func.lower(User.email).like(s)) | (func.lower(User.name).like(s)))
+
+    total = q.count()
+    offset = (page - 1) * limit
+    results = q.order_by(AIUsageLog.created_at.desc()).offset(offset).limit(limit).all()
+
+    logs_out = []
+    for log, u_name, u_email in results:
+        meta = parse_json_field(log.meta_json, {})
+        logs_out.append({
+            "id": log.id,
+            "user_id": log.user_id,
+            "user_name": u_name,
+            "user_email": u_email,
+            "resume_id": log.resume_id,
+            "action_type": log.action_type,
+            "ai_model": log.ai_model or "gemini-2.5-flash",
+            "tokens_used": log.tokens_used or 0,
+            "meta": meta,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
+        })
+
+    return {
+        "logs": logs_out,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": max(1, (total + limit - 1) // limit),
+    }
+
+
+@router.get("/ai-usage/stats")
+def get_admin_ai_usage_stats(
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Telemetry statistics for AI invocation counts, token consumption, and top users.
+    """
+    total_calls = db.query(AIUsageLog).count()
+    total_tokens = db.query(func.coalesce(func.sum(AIUsageLog.tokens_used), 0)).scalar() or 0
+
+    by_action = db.query(
+        AIUsageLog.action_type,
+        func.count(AIUsageLog.id).label("calls"),
+        func.coalesce(func.sum(AIUsageLog.tokens_used), 0).label("tokens")
+    ).group_by(AIUsageLog.action_type).all()
+
+    action_summary = {}
+    for a, c, t in by_action:
+        action_summary[a] = {"calls": c, "tokens": t}
+
+    by_model = db.query(
+        AIUsageLog.ai_model,
+        func.count(AIUsageLog.id)
+    ).group_by(AIUsageLog.ai_model).all()
+    model_summary = {m[0] or "default": m[1] for m in by_model}
+
+    top_users_query = (
+        db.query(
+            AIUsageLog.user_id,
+            User.name,
+            User.email,
+            func.count(AIUsageLog.id).label("calls"),
+            func.coalesce(func.sum(AIUsageLog.tokens_used), 0).label("tokens")
+        )
+        .join(User, AIUsageLog.user_id == User.id)
+        .group_by(AIUsageLog.user_id, User.name, User.email)
+        .order_by(func.sum(AIUsageLog.tokens_used).desc())
+        .limit(10)
+        .all()
+    )
+    top_users = []
+    for uid, name, email, calls, tokens in top_users_query:
+        top_users.append({
+            "user_id": uid,
+            "name": name,
+            "email": email,
+            "calls": calls,
+            "tokens": tokens,
+        })
+
+    return {
+        "total_calls": total_calls,
+        "total_tokens": total_tokens,
+        "by_action": action_summary,
+        "by_model": model_summary,
+        "top_users": top_users,
+    }
