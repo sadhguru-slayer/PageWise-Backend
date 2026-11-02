@@ -1,18 +1,8 @@
 import os
-import json
 import uuid
 import pymupdf
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
-# Load environment variables (such as GEMINI_API_KEY) from .env in backend/ or root
-# without inspecting or modifying the .env file directly.
-backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-root_dir = os.path.dirname(backend_dir)
-load_dotenv(os.path.join(backend_dir, ".env"))
-load_dotenv(os.path.join(root_dir, ".env"))
-load_dotenv()
+from .wiser_runtime import async_generate_json, generate_json, load_prompt
 
 
 def extract_text_from_pdf(pdf_bytes: bytes) -> str:
@@ -82,66 +72,24 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return combined_text
 
 
-def parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = False) -> dict:
-    """
-    Uses Wiser AI models to parse raw resume text
-    into a structured Resume Header and individual Sections using an external prompt file.
-    """
-    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY is not configured in the environment or .env file. "
-            "Please ensure GEMINI_API_KEY is added to your .env file."
-        )
-
-    client = genai.Client(api_key=api_key)
-
-    # Load prompt from separate prompt file
-    prompt_file_path = os.path.join(os.path.dirname(__file__), "prompts", "resume_parser.prompt")
-    with open(prompt_file_path, "r", encoding="utf-8") as pf:
-        prompt_template = pf.read()
+def _build_parse_prompt(extracted_text: str, allow_bold_text: bool = False) -> str:
+    prompt_template = load_prompt("resume_parser.prompt")
 
     if allow_bold_text:
         bold_rule = "Use bold <strong> tags sparingly for job titles and primary metrics where helpful."
     else:
         bold_rule = "DO NOT use any bold tags (<strong> or <b>) anywhere in contentHtml. Keep all text plain and unbolded as standard professional resumes avoid embedded bold tags."
 
+    text = extracted_text or ""
+    if len(text) > 18000:
+        text = text[:18000] + "\n[truncated]"
+
     prompt = prompt_template.replace("{{BOLD_RULE}}", bold_rule)
-    prompt += f"\n\nExtracted Resume Text:\n{extracted_text}\n"
+    prompt += f"\n\nExtracted Resume Text:\n{text}\n"
+    return prompt
 
-    candidate_models = [
-        "models/gemini-3.5-flash",
-        "models/gemini-3.5-flash-lite",
-        "gemini-3.5-flash",
-        "gemini-3.5-flash-lite",
-        "models/gemini-flash-latest",
-    ]
-    last_error = None
-    response = None
 
-    for model_name in candidate_models:
-        try:
-            print(f"[Wiser AI] Attempting resume parsing with engine...")
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
-            )
-            if response and response.text:
-                print(f"[Wiser AI] Successfully parsed resume!")
-                break
-        except Exception as e:
-            print(f"[Wiser AI] Parsing attempt failed: {e}")
-            last_error = e
-
-    if not response or not response.text:
-        raise RuntimeError(f"Wiser AI engine failed to parse resume: {last_error}")
-
-    raw_response_text = response.text.strip()
-    parsed_data = json.loads(raw_response_text)
-
+def _post_process_parsed_data(parsed_data: dict) -> dict:
     # Standardize header with clickable hyperlinks
     hdr = parsed_data.get("header", {})
     contact_parts = []
@@ -173,7 +121,7 @@ def parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = Fals
         hdr["contactLine"] = " · ".join(contact_parts)
     elif not hdr.get("contactLine"):
         hdr["contactLine"] = ""
-    
+
     if "alignment" not in hdr:
         hdr["alignment"] = "center"
     if "showDivider" not in hdr:
@@ -213,6 +161,28 @@ def parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = Fals
             sec["links"] = []
 
     return parsed_data
+
+
+async def async_parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = False) -> dict:
+    """
+    Non-blocking async parser using Wiser AI engine.
+    """
+    prompt = _build_parse_prompt(extracted_text, allow_bold_text=allow_bold_text)
+    print("[Wiser AI] Attempting async resume parsing with engine...")
+    parsed_data = await async_generate_json(prompt, temperature=0.1)
+    print("[Wiser AI] Successfully parsed resume!")
+    return _post_process_parsed_data(parsed_data)
+
+
+def parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = False) -> dict:
+    """
+    Synchronous fallback parser using Wiser AI engine.
+    """
+    prompt = _build_parse_prompt(extracted_text, allow_bold_text=allow_bold_text)
+    print("[Wiser AI] Attempting sync resume parsing with engine...")
+    parsed_data = generate_json(prompt, temperature=0.1)
+    print("[Wiser AI] Successfully parsed resume!")
+    return _post_process_parsed_data(parsed_data)
 
 
 # Backward-compatible alias

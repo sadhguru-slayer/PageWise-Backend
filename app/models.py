@@ -23,6 +23,7 @@ class User(Base):
     ai_logs = relationship("AIUsageLog", back_populates="user", cascade="all, delete-orphan")
     subscription = relationship("Subscription", back_populates="user", uselist=False, cascade="all, delete-orphan")
     payment_orders = relationship("PaymentOrder", back_populates="user", cascade="all, delete-orphan")
+    feedbacks = relationship("Feedback", back_populates="user", cascade="all, delete-orphan")
 
 
 class Resume(Base):
@@ -252,4 +253,39 @@ class PlanTierConfig(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class Feedback(Base):
+    """
+    In-house user feedback system.
+    Scalable across multiple categories: pilot_feedback, bug, feature_request, wiser_ai, general.
+    Includes spam resistance metadata, client telemetry, and admin audit status.
+    """
+    __tablename__ = "feedbacks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    # Classification & Content
+    category = Column(String(50), default="pilot_feedback", nullable=False, index=True)
+    rating = Column(Integer, nullable=True)  # 1 - 5 stars
+    title = Column(String(255), nullable=True)
+    message = Column(Text, nullable=False)
+    email = Column(String(255), nullable=True)
+
+    # Context / Telemetry JSON (url, user_agent, viewport, resume_id, etc.)
+    metadata_json = Column(Text, default="{}", nullable=False)
+
+    # Workflow & Moderation
+    status = Column(String(50), default="new", nullable=False, index=True)  # "new", "reviewed", "in_progress", "resolved", "archived"
+    admin_notes = Column(Text, nullable=True)
+
+    # Anti-Spam Telemetry
+    ip_address = Column(String(100), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    user = relationship("User", back_populates="feedbacks")
 

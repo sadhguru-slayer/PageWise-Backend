@@ -68,6 +68,14 @@ def run_auto_migrations():
                 if "is_archived" not in plan_cols:
                     conn.execute(text("ALTER TABLE plan_tier_configs ADD COLUMN is_archived BOOLEAN DEFAULT 0 NOT NULL"))
 
+            # Feedbacks table auto-creation / column guarantee
+            if "feedbacks" not in existing_tables:
+                try:
+                    from .models import Feedback
+                    Feedback.__table__.create(bind=engine, checkfirst=True)
+                except Exception as fe:
+                    print(f"[AutoMigration] Notice creating feedbacks table: {fe}")
+
             # Soft deletes
             for table in ["resumes", "resume_templates", "exported_resumes"]:
                 if table in existing_tables:

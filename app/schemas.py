@@ -186,6 +186,8 @@ class ResumeCloneRequest(BaseModel):
     target_job_description: Optional[str] = None
     target_ats_score: Optional[float] = None
     jd_analysis_json: Optional[Any] = {}
+    # When workspace slots are full, retarget the source as Master instead of creating a copy.
+    apply_to_existing: Optional[bool] = False
 
 
 # ─── User Template Schemas ───────────────────────────────────────────────────
@@ -346,7 +348,7 @@ class JDAnalyzeRequest(BaseModel):
     resume_id: Optional[int] = None
     job_description: str
     current_resume_override: Optional[Any] = None
-    include_all_user_resumes: Optional[bool] = True
+    include_all_user_resumes: Optional[bool] = False
 
 
 class ATSAnalyzeRequest(BaseModel):
@@ -458,3 +460,70 @@ class AdminInsightsResponse(BaseModel):
     branched_resumes: MetricStat
 
     lifetime_wiser_invocations: int = 0
+
+
+# ─── Feedback Schemas (In-house & Scalable) ──────────────────────────────────
+
+class FeedbackCreate(BaseModel):
+    category: str = Field(default="pilot_feedback", max_length=50)
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    title: Optional[str] = Field(default=None, max_length=255)
+    message: str = Field(..., min_length=5, max_length=5000)
+    email: Optional[EmailStr] = None
+    metadata_json: Optional[Any] = {}
+    website_hp: Optional[str] = None  # Honeypot spam trap (must remain empty)
+
+
+class FeedbackOut(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    user_name: Optional[str] = None
+    user_email: Optional[str] = None
+    category: str
+    rating: Optional[int] = None
+    title: Optional[str] = None
+    message: str
+    email: Optional[str] = None
+    metadata_json: Optional[Any] = {}
+    status: str
+    admin_notes: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("metadata_json", mode="before")
+    @classmethod
+    def parse_meta(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:
+                return {}
+        return v or {}
+
+    class Config:
+        from_attributes = True
+
+
+class FeedbackAdminUpdate(BaseModel):
+    status: Optional[str] = Field(default=None, max_length=50)
+    admin_notes: Optional[str] = None
+
+
+class FeedbackListResponse(BaseModel):
+    items: List[FeedbackOut]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class FeedbackStats(BaseModel):
+    total: int
+    new_count: int
+    reviewed_count: int
+    resolved_count: int
+    avg_rating: Optional[float] = None
+    by_category: dict = {}
+    by_status: dict = {}
+

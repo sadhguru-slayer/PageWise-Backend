@@ -8,7 +8,7 @@ from sqlalchemy import func
 from ..database import get_db
 from ..models import (
     User, Resume, ResumeTemplate, ExportedResume, AIUsageLog,
-    Subscription, PaymentOrder, PlanType, PlanTierConfig
+    Subscription, PaymentOrder, PlanType, PlanTierConfig, Feedback
 )
 from ..auth import get_current_user, hash_password, verify_password, create_access_token
 from ..schemas import (
@@ -23,6 +23,10 @@ from ..schemas import (
     AdminTemplateUpdate,
     PlanTierConfigOut,
     PlanTierConfigUpdate,
+    FeedbackOut,
+    FeedbackAdminUpdate,
+    FeedbackListResponse,
+    FeedbackStats,
 )
 from ..services.subscription import (
     PLAN_CONFIGS,
@@ -916,3 +920,193 @@ def bulk_update_user_plan(
 
     db.commit()
     return {"success": True, "updated_count": updated, "plan_type": plan_type}
+
+
+# ─── User Feedback Telemetry & Moderation ─────────────────────────────────────
+
+@router.get("/feedback", response_model=FeedbackListResponse)
+def list_feedbacks(
+    category: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    sort_by: str = Query("created_at"),
+    sort_order: str = Query("desc"),
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Lists submitted feedbacks with search, category, and status filters."""
+    query = db.query(Feedback).outerjoin(User, Feedback.user_id == User.id)
+
+    if category and isinstance(category, str) and category != "all":
+        query = query.filter(Feedback.category == category)
+
+    if status and isinstance(status, str) and status != "all":
+        query = query.filter(Feedback.status == status)
+
+    if search and isinstance(search, str) and search.strip():
+        term = f"%{search.strip().lower()}%"
+        query = query.filter(
+            func.lower(Feedback.message).like(term)
+            | func.lower(Feedback.title).like(term)
+            | func.lower(Feedback.email).like(term)
+            | func.lower(User.name).like(term)
+            | func.lower(User.email).like(term)
+        )
+
+    total = query.count()
+
+    sort_name = sort_by if isinstance(sort_by, str) else "created_at"
+    sort_col = getattr(Feedback, sort_name, Feedback.created_at)
+    order_val = sort_order if isinstance(sort_order, str) else "desc"
+    if order_val == "asc":
+        query = query.order_by(sort_col.asc())
+    else:
+        query = query.order_by(sort_col.desc())
+
+    offset = (page - 1) * page_size
+    items = query.offset(offset).limit(page_size).all()
+
+    results = []
+    for f in items:
+        meta = {}
+        if f.metadata_json:
+            try:
+                meta = json.loads(f.metadata_json)
+            except Exception:
+                meta = {}
+
+        user_name = f.user.name if f.user else None
+        user_email = f.user.email if f.user else f.email
+
+        results.append(
+            FeedbackOut(
+                id=f.id,
+                user_id=f.user_id,
+                user_name=user_name,
+                user_email=user_email,
+                category=f.category,
+                rating=f.rating,
+                title=f.title,
+                message=f.message,
+                email=f.email or user_email,
+                metadata_json=meta,
+                status=f.status,
+                admin_notes=f.admin_notes,
+                ip_address=f.ip_address,
+                created_at=f.created_at,
+                updated_at=f.updated_at,
+            )
+        )
+
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    return FeedbackListResponse(
+        items=results,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
+
+
+@router.get("/feedback/stats", response_model=FeedbackStats)
+def get_feedback_stats(
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Calculates summary telemetry for feedback submissions."""
+    total = db.query(Feedback).count()
+    new_count = db.query(Feedback).filter(Feedback.status == "new").count()
+    reviewed_count = db.query(Feedback).filter(Feedback.status == "reviewed").count()
+    resolved_count = db.query(Feedback).filter(Feedback.status == "resolved").count()
+
+    avg_rating_row = db.query(func.avg(Feedback.rating)).filter(Feedback.rating != None).scalar()
+    avg_rating = round(float(avg_rating_row), 1) if avg_rating_row else None
+
+    cat_rows = db.query(Feedback.category, func.count(Feedback.id)).group_by(Feedback.category).all()
+    by_category = {cat: count for cat, count in cat_rows}
+
+    status_rows = db.query(Feedback.status, func.count(Feedback.id)).group_by(Feedback.status).all()
+    by_status = {st: count for st, count in status_rows}
+
+    return FeedbackStats(
+        total=total,
+        new_count=new_count,
+        reviewed_count=reviewed_count,
+        resolved_count=resolved_count,
+        avg_rating=avg_rating,
+        by_category=by_category,
+        by_status=by_status,
+    )
+
+
+@router.patch("/feedback/{feedback_id}", response_model=FeedbackOut)
+def update_feedback(
+    feedback_id: int,
+    payload: FeedbackAdminUpdate,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Updates feedback moderation status or internal administrative notes."""
+    item = db.query(Feedback).filter(Feedback.id == feedback_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Feedback item not found.")
+
+    if payload.status is not None:
+        valid_statuses = {"new", "reviewed", "in_progress", "resolved", "archived"}
+        if payload.status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status '{payload.status}'")
+        item.status = payload.status
+
+    if payload.admin_notes is not None:
+        item.admin_notes = payload.admin_notes
+
+    item.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(item)
+
+    meta = {}
+    if item.metadata_json:
+        try:
+            meta = json.loads(item.metadata_json)
+        except Exception:
+            pass
+
+    user_name = item.user.name if item.user else None
+    user_email = item.user.email if item.user else item.email
+
+    return FeedbackOut(
+        id=item.id,
+        user_id=item.user_id,
+        user_name=user_name,
+        user_email=user_email,
+        category=item.category,
+        rating=item.rating,
+        title=item.title,
+        message=item.message,
+        email=item.email or user_email,
+        metadata_json=meta,
+        status=item.status,
+        admin_notes=item.admin_notes,
+        ip_address=item.ip_address,
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+@router.delete("/feedback/{feedback_id}")
+def delete_feedback(
+    feedback_id: int,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Deletes a feedback record permanently."""
+    item = db.query(Feedback).filter(Feedback.id == feedback_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Feedback item not found.")
+
+    db.delete(item)
+    db.commit()
+    return {"success": True, "deleted_id": feedback_id}
+

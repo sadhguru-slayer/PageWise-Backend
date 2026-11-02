@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -397,8 +398,9 @@ def set_primary_resume(
     # Unset is_primary for all other user resumes
     db.query(Resume).filter(Resume.user_id == current_user.id, Resume.is_deleted == False).update({"is_primary": False})
 
-    # Set selected resume as primary
+    # Set selected resume as primary and bump recency so it stays in the active slot
     resume.is_primary = True
+    resume.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(resume)
 
@@ -450,28 +452,44 @@ async def parse_pdf_resume(
     file: UploadFile = File(...),
     create_resume: bool = Form(False),
     resume_name: str = Form(None),
+    target_resume_id: Optional[int] = Form(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Extracts text from an uploaded resume PDF using PyMuPDF and uses
     Wiser AI engine to parse it into structured sections and header.
+    Can create a new resume or update any existing resume content.
     """
-    from ..ai_extractor import extract_text_from_pdf, parse_resume_with_wiser_ai
+    from ..ai_extractor import extract_text_from_pdf, async_parse_resume_with_wiser_ai
     import traceback
 
-    print(f"[parse-pdf] Received uploaded file: '{file.filename}', user: {current_user.email}")
+    print(f"[parse-pdf] Received uploaded file: '{file.filename}', user: {current_user.email}, target_resume_id: {target_resume_id}")
 
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported for import.")
 
-    if create_resume:
+    # 1. Enforce Wiser AI quota/credits
+    enforce_wiser_ai_limit(db, current_user, action_type="wiser_pdf_import")
+
+    # 2. Check resume target / limits
+    target_resume = None
+    if target_resume_id:
+        target_resume = (
+            db.query(Resume)
+            .filter(Resume.id == target_resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False)
+            .first()
+        )
+        if not target_resume:
+            raise HTTPException(status_code=404, detail="Selected target resume not found.")
+        enforce_resume_edit_permission(db, current_user, target_resume.id)
+    elif create_resume:
         enforce_resume_limit(db, current_user)
 
     try:
         content = await file.read()
-        print(f"[parse-pdf] Read {len(content)} bytes from PDF. Extracting text...")
-        extracted_text = extract_text_from_pdf(content)
+        print(f"[parse-pdf] Read {len(content)} bytes from PDF. Extracting text asynchronously...")
+        extracted_text = await asyncio.to_thread(extract_text_from_pdf, content)
         print(f"[parse-pdf] Extracted {len(extracted_text)} characters of text from PDF.")
     except Exception as e:
         traceback.print_exc()
@@ -481,7 +499,7 @@ async def parse_pdf_resume(
         print("[parse-pdf] Sending extracted text to Wiser AI...")
         user_prefs = parse_json_field(current_user.preferences_json, {})
         allow_bold = bool(user_prefs.get("allow_bold_text", False))
-        parsed_data = parse_resume_with_wiser_ai(extracted_text, allow_bold_text=allow_bold)
+        parsed_data = await async_parse_resume_with_wiser_ai(extracted_text, allow_bold_text=allow_bold)
         print("[parse-pdf] Wiser AI parsing completed successfully.")
     except ValueError as ve:
         print(f"[parse-pdf] Configuration/Validation Error: {ve}")
@@ -490,8 +508,55 @@ async def parse_pdf_resume(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Wiser AI extraction failed: {str(ge)}")
 
+    # Deduct / increment Wiser AI usage counter
+    increment_wiser_ai_usage(db, current_user, action_type="wiser_pdf_import")
+
+    # Record AI Usage Audit Log
+    try:
+        ai_log = AIUsageLog(
+            user_id=current_user.id,
+            resume_id=target_resume.id if target_resume else None,
+            action_type="wiser_pdf_import",
+            ai_model="Wiser AI Engine",
+            tokens_used=len(extracted_text) // 4,
+            meta_json=json.dumps({"filename": file.filename})
+        )
+        db.add(ai_log)
+        db.commit()
+    except Exception as log_err:
+        print(f"[parse-pdf] Notice: Could not record AIUsageLog: {log_err}")
+
+    # Case 1: Update existing target resume
+    if target_resume:
+        target_resume.header_json = serialize_json_field(parsed_data.get("header", {}))
+        target_resume.sections_json = serialize_json_field(parsed_data.get("sections", []))
+        target_resume.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(target_resume)
+
+        active_ids = get_user_active_workspace_ids(db, current_user)
+        return {
+            "success": True,
+            "updated_resume_id": target_resume.id,
+            "header": parsed_data.get("header", {}),
+            "sections": parsed_data.get("sections", []),
+            "resume": ResumeDetail(
+                id=target_resume.id,
+                user_id=target_resume.user_id,
+                name=target_resume.name,
+                header_json=parse_json_field(target_resume.header_json, {}),
+                settings_json=parse_json_field(target_resume.settings_json, {}),
+                sections_json=parse_json_field(target_resume.sections_json, []),
+                created_at=target_resume.created_at,
+                updated_at=target_resume.updated_at,
+                is_primary=bool(target_resume.is_primary),
+                is_locked=(target_resume.id not in active_ids),
+                parent_resume_id=target_resume.parent_resume_id,
+            )
+        }
+
+    # Case 2: Create brand new resume
     if create_resume:
-        enforce_resume_limit(db, current_user)
         name = resume_name or parsed_data.get("header", {}).get("name") or "Imported Resume"
         default_settings = {
             "marginTop": 15,
@@ -538,6 +603,7 @@ async def parse_pdf_resume(
             )
         }
 
+    # Case 3: Parse-only (client will handle in-memory state)
     return {
         "success": True,
         "header": parsed_data.get("header", {}),
@@ -546,7 +612,7 @@ async def parse_pdf_resume(
 
 
 @router.post("/analyze-jd")
-def analyze_job_description(
+async def analyze_job_description(
     payload: JDAnalyzeRequest,
     current_user: User = Depends(require_wiser_job_help_quota),
     db: Session = Depends(get_db)
@@ -556,13 +622,10 @@ def analyze_job_description(
     their historical resumes archive. Performs strict ATS scoring and generates
     Canva-like bullet enhancements.
     """
-    from ..jd_analyzer import analyze_jd_and_ats
+    from ..jd_analyzer import async_analyze_jd_and_ats
 
     if not payload.job_description or not payload.job_description.strip():
         raise HTTPException(status_code=400, detail="Job description text is required.")
-
-    # Quota check
-    enforce_wiser_ai_limit(db, current_user, action_type="wiser_job_help")
 
     # 1. Fetch current resume
     current_resume_dict = None
@@ -602,13 +665,14 @@ def analyze_job_description(
         else:
             current_resume_dict = {"header_json": {}, "sections_json": []}
 
-    # 2. Fetch user's previous resumes for richer context & cross-resume suggestions
+    # 2. Optional archive context — cap at 2 recent resumes to keep Wiser latency low
     previous_resumes_list = []
     if payload.include_all_user_resumes:
         user_resumes = (
             db.query(Resume)
-            .filter(Resume.user_id == current_user.id)
+            .filter(Resume.user_id == current_user.id, Resume.is_deleted == False)
             .order_by(Resume.updated_at.desc())
+            .limit(3)
             .all()
         )
         for ur in user_resumes:
@@ -620,34 +684,36 @@ def analyze_job_description(
                 "header_json": parse_json_field(ur.header_json, {}),
                 "sections_json": parse_json_field(ur.sections_json, []),
             })
+            if len(previous_resumes_list) >= 2:
+                break
 
     try:
         user_prefs = parse_json_field(current_user.preferences_json, {})
         allow_bold = bool(user_prefs.get("allow_bold_text", False))
-        analysis_result = analyze_jd_and_ats(
+        analysis_result = await async_analyze_jd_and_ats(
             job_description=payload.job_description,
             current_resume=current_resume_dict,
             previous_resumes=previous_resumes_list,
             allow_bold_text=allow_bold
         )
 
-        # Automatically store summarized JD & ATS analysis in the target resume if resume_id is provided
+        # Persist analysis only on editable (unlocked) workspaces
         valid_res_id = None
         if payload.resume_id:
             res_to_update = db.query(Resume).filter(Resume.id == payload.resume_id, Resume.user_id == current_user.id, Resume.is_deleted == False).first()
             if res_to_update:
                 valid_res_id = res_to_update.id
-                job_an = analysis_result.get("job_analysis", {})
-                ats_ck = analysis_result.get("ats_check", {})
-                res_to_update.target_job_title = job_an.get("title") or res_to_update.target_job_title
-                res_to_update.target_company = job_an.get("company") or res_to_update.target_company
-                res_to_update.target_ats_score = ats_ck.get("overall_score")
-                
-                # Store concise summary version of JD (not raw giant bloat)
-                jd_summary = job_an.get("summary") or (payload.job_description[:300] + "...")
-                res_to_update.target_job_description = jd_summary
-                res_to_update.jd_analysis_json = json.dumps(analysis_result)
-                db.commit()
+                active_ids = get_user_active_workspace_ids(db, current_user)
+                if res_to_update.id in active_ids:
+                    job_an = analysis_result.get("job_analysis", {})
+                    ats_ck = analysis_result.get("ats_check", {})
+                    res_to_update.target_job_title = job_an.get("title") or res_to_update.target_job_title
+                    res_to_update.target_company = job_an.get("company") or res_to_update.target_company
+                    res_to_update.target_ats_score = ats_ck.get("overall_score")
+                    jd_summary = job_an.get("summary") or (payload.job_description[:300] + "...")
+                    res_to_update.target_job_description = jd_summary
+                    res_to_update.jd_analysis_json = json.dumps(analysis_result)
+                    db.commit()
 
         # Record Wiser AI Usage Log (Job Help)
         analysis_result.pop("_ai_model", None)
@@ -684,7 +750,7 @@ def analyze_job_description(
 
 
 @router.post("/analyze-ats")
-def analyze_standalone_resume_ats(
+async def analyze_standalone_resume_ats(
     payload: ATSAnalyzeRequest,
     current_user: User = Depends(require_wiser_ats_quota),
     db: Session = Depends(get_db)
@@ -693,10 +759,7 @@ def analyze_standalone_resume_ats(
     Performs standalone 'Wiser ATS' audit on a resume without requiring a Job Description.
     Audits keyword positioning, action verbs, quantified impact, and structural parseability.
     """
-    from ..jd_analyzer import analyze_standalone_ats
-
-    # Quota check
-    enforce_wiser_ai_limit(db, current_user, action_type="wiser_ats_check")
+    from ..jd_analyzer import async_analyze_standalone_ats
 
     # 1. Fetch current resume
     current_resume_dict = None
@@ -738,7 +801,7 @@ def analyze_standalone_resume_ats(
     try:
         user_prefs = parse_json_field(current_user.preferences_json, {})
         allow_bold = bool(user_prefs.get("allow_bold_text", False))
-        analysis_result = analyze_standalone_ats(
+        analysis_result = await async_analyze_standalone_ats(
             current_resume=current_resume_dict,
             allow_bold_text=allow_bold
         )
@@ -798,12 +861,12 @@ def analyze_standalone_resume_ats(
 def clone_resume(
     resume_id: int,
     payload: ResumeCloneRequest,
-    current_user: User = Depends(require_resume_quota),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
-    Deep-clones a resume into a new job-targeted version.
-    The source resume remains untouched.
+    Deep-clones a resume into a new job-targeted version, or retargets the
+    existing Master workspace when apply_to_existing is set (workspace cap).
     """
     source = (
         db.query(Resume)
@@ -812,6 +875,48 @@ def clone_resume(
     )
     if not source:
         raise HTTPException(status_code=404, detail="Source resume not found or access denied")
+
+    def _detail(resume_obj: Resume) -> ResumeDetail:
+        active_ids = get_user_active_workspace_ids(db, current_user)
+        return ResumeDetail(
+            id=resume_obj.id,
+            user_id=resume_obj.user_id,
+            name=resume_obj.name,
+            header_json=parse_json_field(resume_obj.header_json, {}),
+            settings_json=parse_json_field(resume_obj.settings_json, {}),
+            sections_json=parse_json_field(resume_obj.sections_json, []),
+            created_at=resume_obj.created_at,
+            updated_at=resume_obj.updated_at,
+            target_job_title=resume_obj.target_job_title,
+            target_company=resume_obj.target_company,
+            target_job_description=resume_obj.target_job_description,
+            target_ats_score=resume_obj.target_ats_score,
+            jd_analysis_json=parse_json_field(resume_obj.jd_analysis_json, {}),
+            is_primary=bool(resume_obj.is_primary),
+            is_locked=(resume_obj.id not in active_ids),
+            parent_resume_id=resume_obj.parent_resume_id,
+        )
+
+    if payload.apply_to_existing:
+        db.query(Resume).filter(
+            Resume.user_id == current_user.id,
+            Resume.is_deleted == False,
+        ).update({"is_primary": False})
+        source.is_primary = True
+        if payload.new_name:
+            source.name = payload.new_name
+        elif payload.target_company and payload.target_job_title:
+            source.name = f"{source.name.split(' — ')[0]} — {payload.target_company} ({payload.target_job_title})"
+        source.target_job_title = payload.target_job_title or source.target_job_title
+        source.target_company = payload.target_company or source.target_company
+        source.target_job_description = payload.target_job_description or source.target_job_description
+        source.target_ats_score = payload.target_ats_score if payload.target_ats_score is not None else source.target_ats_score
+        if payload.jd_analysis_json:
+            source.jd_analysis_json = serialize_json_field(payload.jd_analysis_json)
+        source.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(source)
+        return _detail(source)
 
     enforce_resume_limit(db, current_user)
 
@@ -841,27 +946,7 @@ def clone_resume(
     db.add(cloned)
     db.commit()
     db.refresh(cloned)
-
-    active_ids = get_user_active_workspace_ids(db, current_user)
-
-    return ResumeDetail(
-        id=cloned.id,
-        user_id=cloned.user_id,
-        name=cloned.name,
-        header_json=parse_json_field(cloned.header_json, {}),
-        settings_json=parse_json_field(cloned.settings_json, {}),
-        sections_json=parse_json_field(cloned.sections_json, []),
-        created_at=cloned.created_at,
-        updated_at=cloned.updated_at,
-        target_job_title=cloned.target_job_title,
-        target_company=cloned.target_company,
-        target_job_description=cloned.target_job_description,
-        target_ats_score=cloned.target_ats_score,
-        jd_analysis_json=parse_json_field(cloned.jd_analysis_json, {}),
-        is_primary=bool(cloned.is_primary),
-        is_locked=(cloned.id not in active_ids),
-        parent_resume_id=cloned.parent_resume_id,
-    )
+    return _detail(cloned)
 
 
 # ─── User Template CRUD ────────────────────────────────────────────────────────

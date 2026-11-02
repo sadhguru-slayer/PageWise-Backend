@@ -410,26 +410,26 @@ def increment_export_usage(db: Session, user: User):
 
 
 def enforce_wiser_ai_limit(db: Session, user: User, action_type: str = "wiser_job_help"):
-    """Enforces Wiser AI limits (Job Help vs ATS check)."""
+    """Enforces Wiser AI limits (Job Help, PDF parsing, or ATS check)."""
     with quota_lock:
         sub = get_or_create_subscription(db, user.id)
         plan_config = get_tier_config(db, sub.plan_type)
 
         if sub.plan_type == PlanType.FREE:
-            # Free tier: 1 combined evaluation allowance covering both Job Help and ATS
+            # Free tier: 1 combined evaluation allowance covering both Job Help, PDF parsing, and ATS
             combined = (sub.wiser_job_help_used or 0) + (sub.wiser_ats_used or 0)
             if combined >= plan_config["wiser_ai_limit"]:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail="Wiser AI evaluation allowance reached for Pagewise Free (1 evaluation). Upgrade to Wiser Day Pass or Pagewise Pro for more."
+                    detail="Wiser AI credit allowance reached for Pagewise Free (1 evaluation). Upgrade to Wiser Day Pass or Pagewise Pro for more."
                 )
         else:
             # Tiered limits
-            if action_type == "wiser_job_help":
+            if action_type in ("wiser_job_help", "wiser_pdf_import"):
                 if (sub.wiser_job_help_used or 0) >= plan_config["wiser_job_help_limit"]:
                     raise HTTPException(
                         status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                        detail=f"Wiser Job Help allowance of {plan_config['wiser_job_help_limit']} reached. Upgrade to Pagewise Pro for 15 evaluations."
+                        detail=f"Wiser AI allowance of {plan_config['wiser_job_help_limit']} reached. Upgrade to Pagewise Pro for more evaluations."
                     )
             elif action_type == "wiser_ats_check":
                 if (sub.wiser_ats_used or 0) >= plan_config["wiser_ats_limit"]:
@@ -443,7 +443,7 @@ def increment_wiser_ai_usage(db: Session, user: User, action_type: str = "wiser_
     """Increments the specific Wiser AI usage counter for the user."""
     with quota_lock:
         sub = get_or_create_subscription(db, user.id)
-        if action_type == "wiser_job_help":
+        if action_type in ("wiser_job_help", "wiser_pdf_import"):
             sub.wiser_job_help_used = (sub.wiser_job_help_used or 0) + 1
         elif action_type == "wiser_ats_check":
             sub.wiser_ats_used = (sub.wiser_ats_used or 0) + 1
