@@ -274,6 +274,29 @@ class PlanTierConfigOut(BaseModel):
         from_attributes = True
 
 
+class PlanTierConfigCreate(BaseModel):
+    tier_key: str
+    name: str
+    tagline: Optional[str] = None
+    badge: Optional[str] = None
+    base_price_inr: int = 0
+    discount_price_inr: Optional[int] = None
+    discount_percent: Optional[int] = 0
+    billing_period_text: str = ""
+    duration_days: Optional[int] = None
+    resume_limit: int = 1
+    export_limit: int = 5
+    wiser_ai_limit: int = 10
+    wiser_job_help_limit: Optional[int] = None
+    wiser_ats_limit: Optional[int] = None
+    custom_template_limit: int = 1
+    premium_templates_allowed: int = 1
+    features: List[str] = []
+    is_active: bool = True
+    is_archived: bool = False
+    display_order: int = 0
+
+
 class PlanTierConfigUpdate(BaseModel):
     name: Optional[str] = None
     tagline: Optional[str] = None

@@ -23,6 +23,7 @@ from ..schemas import (
     AdminTemplateCreate,
     AdminTemplateUpdate,
     PlanTierConfigOut,
+    PlanTierConfigCreate,
     PlanTierConfigUpdate,
     FeedbackOut,
     FeedbackAdminUpdate,
@@ -810,6 +811,151 @@ def admin_update_tier(
     }
 
 
+
+@router.post("/tiers")
+def admin_create_tier(
+    payload: PlanTierConfigCreate,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Creates a new subscription plan tier in the system."""
+    tier_key = payload.tier_key.strip().lower()
+    existing = db.query(PlanTierConfig).filter(PlanTierConfig.tier_key == tier_key).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Tier with key '{tier_key}' already exists.")
+
+    disc_price = payload.discount_price_inr if payload.discount_price_inr is not None else payload.base_price_inr
+    job_help = payload.wiser_job_help_limit if payload.wiser_job_help_limit is not None else payload.wiser_ai_limit // 2
+    ats = payload.wiser_ats_limit if payload.wiser_ats_limit is not None else payload.wiser_ai_limit // 2
+
+    new_tier = PlanTierConfig(
+        tier_key=tier_key,
+        name=payload.name,
+        tagline=payload.tagline,
+        badge=payload.badge,
+        base_price_inr=payload.base_price_inr,
+        discount_price_inr=disc_price,
+        discount_percent=payload.discount_percent or 0,
+        billing_period_text=payload.billing_period_text or f"₹{disc_price}",
+        duration_days=payload.duration_days,
+        resume_limit=payload.resume_limit,
+        export_limit=payload.export_limit,
+        wiser_ai_limit=payload.wiser_ai_limit,
+        wiser_job_help_limit=job_help,
+        wiser_ats_limit=ats,
+        custom_template_limit=payload.custom_template_limit,
+        premium_templates_allowed=payload.premium_templates_allowed,
+        features_json=json.dumps(payload.features or []),
+        is_active=payload.is_active,
+        is_archived=payload.is_archived,
+        display_order=payload.display_order,
+    )
+    db.add(new_tier)
+    db.commit()
+    db.refresh(new_tier)
+
+    return {
+        "success": True,
+        "message": f"Successfully created tier '{new_tier.name}' ({new_tier.tier_key})",
+        "tier": {
+            "id": new_tier.id,
+            "tier_key": new_tier.tier_key,
+            "name": new_tier.name,
+            "price_inr": disc_price,
+            "resume_limit": new_tier.resume_limit,
+        }
+    }
+
+
+@router.delete("/tiers/{tier_key}")
+def admin_delete_tier(
+    tier_key: str,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Deletes a custom tier or archives a system core tier."""
+    tier = db.query(PlanTierConfig).filter(PlanTierConfig.tier_key == tier_key).first()
+    if not tier:
+        raise HTTPException(status_code=404, detail=f"Tier '{tier_key}' not found.")
+
+    if tier_key in [PlanType.FREE, PlanType.PILOT]:
+        tier.is_archived = True
+        tier.is_active = False
+        db.commit()
+        return {"success": True, "message": f"Core tier '{tier_key}' archived (cannot be permanently deleted)."}
+
+    db.delete(tier)
+    db.commit()
+    return {"success": True, "message": f"Tier '{tier_key}' deleted successfully."}
+
+
+@router.post("/tiers/sync-defaults")
+def admin_sync_default_tiers(
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Seeds/restores default plans (free, day_pass, pro_monthly, pilot)
+    and unarchives all tiers with Pilot set to 20 workspaces.
+    """
+    from ..services.subscription import PLAN_CONFIGS
+    
+    synced = []
+    for key, cfg in PLAN_CONFIGS.items():
+        record = db.query(PlanTierConfig).filter(PlanTierConfig.tier_key == key).first()
+        feat_str = json.dumps(cfg["features"])
+        if record:
+            record.name = cfg["name"]
+            record.tagline = cfg.get("tagline", "")
+            record.badge = cfg.get("badge", "")
+            record.base_price_inr = cfg.get("base_price_inr", cfg["price_inr"])
+            record.discount_price_inr = cfg.get("discount_price_inr", cfg["price_inr"])
+            record.discount_percent = cfg.get("discount_percent", 0)
+            record.billing_period_text = cfg.get("billing_period_text", f"₹{cfg['price_inr']}")
+            record.duration_days = cfg.get("duration_days")
+            record.resume_limit = cfg["resume_limit"]
+            record.export_limit = cfg["export_limit"]
+            record.wiser_ai_limit = cfg["wiser_ai_limit"]
+            record.wiser_job_help_limit = cfg.get("wiser_job_help_limit", cfg["wiser_ai_limit"] // 2)
+            record.wiser_ats_limit = cfg.get("wiser_ats_limit", cfg["wiser_ai_limit"] // 2)
+            record.custom_template_limit = cfg.get("custom_template_limit", 1)
+            record.premium_templates_allowed = cfg.get("premium_templates_allowed", 1)
+            record.features_json = feat_str
+            record.is_active = True
+            record.is_archived = False
+        else:
+            record = PlanTierConfig(
+                tier_key=key,
+                name=cfg["name"],
+                tagline=cfg.get("tagline", ""),
+                badge=cfg.get("badge", ""),
+                base_price_inr=cfg.get("base_price_inr", cfg["price_inr"]),
+                discount_price_inr=cfg.get("discount_price_inr", cfg["price_inr"]),
+                discount_percent=cfg.get("discount_percent", 0),
+                billing_period_text=cfg.get("billing_period_text", f"₹{cfg['price_inr']}"),
+                duration_days=cfg.get("duration_days"),
+                resume_limit=cfg["resume_limit"],
+                export_limit=cfg["export_limit"],
+                wiser_ai_limit=cfg["wiser_ai_limit"],
+                wiser_job_help_limit=cfg.get("wiser_job_help_limit", cfg["wiser_ai_limit"] // 2),
+                wiser_ats_limit=cfg.get("wiser_ats_limit", cfg["wiser_ai_limit"] // 2),
+                custom_template_limit=cfg.get("custom_template_limit", 1),
+                premium_templates_allowed=cfg.get("premium_templates_allowed", 1),
+                features_json=feat_str,
+                is_active=True,
+                is_archived=False,
+                display_order=0 if key == PlanType.PILOT else 1 if key == PlanType.FREE else 2 if key == PlanType.DAY_PASS else 3
+            )
+            db.add(record)
+        synced.append(key)
+
+    db.commit()
+    return {
+        "success": True,
+        "message": f"Successfully synced and unarchived all default tiers ({', '.join(synced)}). Pilot set to 20 workspaces.",
+        "synced_tiers": synced
+    }
+
 @router.post("/apply-pilot-all")
 def apply_pilot_all(
     archive_others: bool = Query(True, description="Archive all non-pilot tiers to hide paid checkouts"),
@@ -860,11 +1006,17 @@ def apply_pilot_all(
         pilot_tier.custom_template_limit = pilot_cfg["custom_template_limit"]
         pilot_tier.premium_templates_allowed = pilot_cfg["premium_templates_allowed"]
 
-    # Archive other tiers if requested
+    # Archive or restore other tiers
     if archive_others:
         other_tiers = db.query(PlanTierConfig).filter(PlanTierConfig.tier_key != PlanType.PILOT).all()
         for ot in other_tiers:
             ot.is_archived = True
+    else:
+        # Restore all tiers so they are published and active
+        all_tiers = db.query(PlanTierConfig).all()
+        for ot in all_tiers:
+            ot.is_archived = False
+            ot.is_active = True
 
     # Migrate all non-admin users to pilot
     non_admins = db.query(User).filter(User.is_admin == False).all()
