@@ -33,7 +33,7 @@ except ValueError:
     SMTP_PORT = 587
 SMTP_USERNAME = os.getenv("EMAIL") or os.getenv("SMTP_USERNAME") or os.getenv("SMTP_USER", "")
 SMTP_PASSWORD = os.getenv("APP_PASSWORD") or os.getenv("SMTP_PASSWORD", "")
-SMTP_FROM = os.getenv("SMTP_FROM") or SMTP_USERNAME or "noreply@resumo.app"
+SMTP_FROM = os.getenv("SMTP_FROM") or SMTP_USERNAME or "pagewises@gmail.com"
 
 GMAIL_CLIENT_ID = os.getenv("CLIENT_ID") or os.getenv("GMAIL_CLIENT_ID", "")
 GMAIL_CLIENT_SECRET = os.getenv("CLIENT_SECRET") or os.getenv("CLIENT_SECRETE") or os.getenv("GMAIL_CLIENT_SECRET", "")
