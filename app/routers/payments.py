@@ -1,19 +1,21 @@
 import hmac
 import hashlib
+import json
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import User, PaymentOrder, Subscription, PlanType
+from ..models import User, PaymentOrder, Subscription, PlanType, PlanTierConfig
 from ..auth import get_current_user
 from ..config import RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET
 from ..schemas import CreateOrderRequest, VerifyPaymentRequest, PlanStatusResponse
 from ..services.subscription import (
     PLAN_CONFIGS,
     get_or_create_subscription,
-    get_user_plan_status
+    get_user_plan_status,
+    get_tier_config
 )
 
 router = APIRouter(prefix="/api/payments", tags=["Payments"])
@@ -32,13 +34,82 @@ def get_razorpay_client():
 
 
 @router.get("/config")
-def get_payment_config():
-    """Provides public Razorpay key ID to frontend for initiating checkout."""
+def get_payment_config(db: Session = Depends(get_db)):
+    """Provides public Razorpay key ID and dynamic plans to frontend for initiating checkout."""
+    plans = list_active_plans(db=db)
     return {
         "key_id": RAZORPAY_KEY_ID or "rzp_test_placeholder",
         "currency": "INR",
-        "plans": PLAN_CONFIGS
+        "plans": plans
     }
+
+
+@router.get("/plans")
+def list_active_plans(db: Session = Depends(get_db)):
+    """Returns active subscription plans configured by admin."""
+    tiers = (
+        db.query(PlanTierConfig)
+        .filter(PlanTierConfig.is_active == True)
+        .order_by(PlanTierConfig.display_order.asc())
+        .all()
+    )
+    if not tiers:
+        return [
+            {
+                "tier_key": k,
+                "name": v["name"],
+                "tagline": v.get("tagline", ""),
+                "badge": v.get("badge", ""),
+                "base_price_inr": v.get("base_price_inr", v["price_inr"]),
+                "discount_price_inr": v.get("discount_price_inr", v["price_inr"]),
+                "discount_percent": v.get("discount_percent", 0),
+                "billing_period_text": v.get("billing_period_text", ""),
+                "duration_days": v.get("duration_days"),
+                "resume_limit": v["resume_limit"],
+                "export_limit": v["export_limit"],
+                "wiser_ai_limit": v["wiser_ai_limit"],
+                "wiser_job_help_limit": v.get("wiser_job_help_limit", v["wiser_ai_limit"]),
+                "wiser_ats_limit": v.get("wiser_ats_limit", v["wiser_ai_limit"]),
+                "custom_template_limit": v.get("custom_template_limit", 1),
+                "premium_templates_allowed": v.get("premium_templates_allowed", 1),
+                "features": v.get("features", []),
+                "is_active": True,
+                "display_order": 0,
+            }
+            for k, v in PLAN_CONFIGS.items()
+        ]
+
+    out = []
+    for t in tiers:
+        features = []
+        if t.features_json:
+            try:
+                features = json.loads(t.features_json)
+            except Exception:
+                features = []
+        out.append({
+            "id": t.id,
+            "tier_key": t.tier_key,
+            "name": t.name,
+            "tagline": t.tagline or "",
+            "badge": t.badge or "",
+            "base_price_inr": t.base_price_inr,
+            "discount_price_inr": t.discount_price_inr if t.discount_price_inr is not None else t.base_price_inr,
+            "discount_percent": t.discount_percent or 0,
+            "billing_period_text": t.billing_period_text or "",
+            "duration_days": t.duration_days,
+            "resume_limit": t.resume_limit,
+            "export_limit": t.export_limit,
+            "wiser_ai_limit": t.wiser_ai_limit,
+            "wiser_job_help_limit": t.wiser_job_help_limit,
+            "wiser_ats_limit": t.wiser_ats_limit,
+            "custom_template_limit": t.custom_template_limit,
+            "premium_templates_allowed": t.premium_templates_allowed,
+            "features": features,
+            "is_active": t.is_active,
+            "display_order": t.display_order,
+        })
+    return out
 
 
 @router.get("/status", response_model=PlanStatusResponse)
@@ -57,17 +128,21 @@ def create_payment_order(
     db: Session = Depends(get_db)
 ):
     """
-    Creates a Razorpay Order for purchasing Day Pass (₹49) or Pagewise Pro (₹199).
+    Creates a Razorpay Order for purchasing Day Pass or Pagewise Pro using dynamic admin tier prices.
     Also supports sandbox/mock order creation if keys are running in initial test setup.
     """
-    plan_info = PLAN_CONFIGS.get(payload.plan_type)
-    if not plan_info or plan_info["price_inr"] <= 0:
+    plan_info = get_tier_config(db, payload.plan_type)
+    effective_price = plan_info.get("discount_price_inr")
+    if effective_price is None:
+        effective_price = plan_info.get("price_inr", 0)
+
+    if not plan_info or effective_price <= 0:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid or free plan selected: '{payload.plan_type}'."
         )
 
-    amount_inr = plan_info["price_inr"]
+    amount_inr = effective_price
     amount_paise = amount_inr * 100
     receipt = f"rcpt_u{current_user.id}_{int(datetime.utcnow().timestamp())}"
 
@@ -165,7 +240,7 @@ def verify_payment(
 
     # Upgrade or extend user's subscription
     sub = get_or_create_subscription(db, current_user.id)
-    plan_info = PLAN_CONFIGS.get(order.plan_type, PLAN_CONFIGS[PlanType.PRO_MONTHLY])
+    plan_info = get_tier_config(db, order.plan_type)
 
     now = datetime.utcnow()
     sub.plan_type = order.plan_type

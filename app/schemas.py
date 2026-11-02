@@ -118,7 +118,8 @@ class ResumeBase(BaseModel):
 
 
 class ResumeCreate(ResumeBase):
-    pass
+    template_key: Optional[str] = None
+    template_id: Optional[int] = None
 
 
 class ResumeUpdate(BaseModel):
@@ -199,16 +200,98 @@ class TemplateCreate(BaseModel):
 
 class TemplateOut(BaseModel):
     id: int
-    user_id: int
+    user_id: Optional[int] = None
     name: str
     description: Optional[str] = None
+    template_key: Optional[str] = None
     settings_json: Any
     header_style_json: Any
     section_defaults_json: Any
+    is_global: bool = False
+    min_plan_tier: str = "free"
+    badge: Optional[str] = None
+    category: Optional[str] = None
+    display_order: int = 0
+    is_active: bool = True
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class AdminTemplateCreate(BaseModel):
+    template_key: Optional[str] = None
+    name: str = Field(..., min_length=1, max_length=255)
+    description: Optional[str] = None
+    category: Optional[str] = None
+    badge: Optional[str] = None
+    min_plan_tier: str = "free"  # "free", "day_pass", "pro_monthly"
+    settings_json: Any = {}
+    header_style_json: Any = {}
+    section_defaults_json: Any = {}
+    display_order: int = 0
+    is_active: bool = True
+
+
+class AdminTemplateUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    category: Optional[str] = None
+    badge: Optional[str] = None
+    min_plan_tier: Optional[str] = None
+    settings_json: Optional[Any] = None
+    header_style_json: Optional[Any] = None
+    section_defaults_json: Optional[Any] = None
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class PlanTierConfigOut(BaseModel):
+    id: int
+    tier_key: str
+    name: str
+    tagline: Optional[str] = None
+    badge: Optional[str] = None
+    base_price_inr: int
+    discount_price_inr: int
+    discount_percent: int
+    billing_period_text: str
+    duration_days: Optional[int] = None
+    resume_limit: int
+    export_limit: int
+    wiser_ai_limit: int
+    wiser_job_help_limit: int
+    wiser_ats_limit: int
+    custom_template_limit: int
+    premium_templates_allowed: int
+    features: List[str] = []
+    is_active: bool
+    display_order: int
+
+    class Config:
+        from_attributes = True
+
+
+class PlanTierConfigUpdate(BaseModel):
+    name: Optional[str] = None
+    tagline: Optional[str] = None
+    badge: Optional[str] = None
+    base_price_inr: Optional[int] = None
+    discount_price_inr: Optional[int] = None
+    discount_percent: Optional[int] = None
+    billing_period_text: Optional[str] = None
+    duration_days: Optional[int] = None
+    resume_limit: Optional[int] = None
+    export_limit: Optional[int] = None
+    wiser_ai_limit: Optional[int] = None
+    wiser_job_help_limit: Optional[int] = None
+    wiser_ats_limit: Optional[int] = None
+    custom_template_limit: Optional[int] = None
+    premium_templates_allowed: Optional[int] = None
+    features: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+    display_order: Optional[int] = None
+
 
 
 # ─── Export Schemas ──────────────────────────────────────────────────────────

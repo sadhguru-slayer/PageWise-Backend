@@ -1,11 +1,15 @@
 from datetime import datetime, timedelta
+import json
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from ..database import get_db
-from ..models import User, Resume, ResumeTemplate, ExportedResume, AIUsageLog, Subscription, PaymentOrder, PlanType
+from ..models import (
+    User, Resume, ResumeTemplate, ExportedResume, AIUsageLog,
+    Subscription, PaymentOrder, PlanType, PlanTierConfig
+)
 from ..auth import get_current_user, hash_password, verify_password, create_access_token
 from ..schemas import (
     UserOut,
@@ -14,7 +18,11 @@ from ..schemas import (
     AdminUserUpdate,
     AdminResetSelfPassword,
     AdminInsightsResponse,
-    MetricStat
+    MetricStat,
+    AdminTemplateCreate,
+    AdminTemplateUpdate,
+    PlanTierConfigOut,
+    PlanTierConfigUpdate,
 )
 from ..services.subscription import (
     PLAN_CONFIGS,
@@ -542,3 +550,251 @@ def get_admin_insights(
         resumes=resumes_stat,
         branched_resumes=branched_stat
     )
+
+
+# ─── Template & Tier Admin Management ──────────────────────────────────────────
+
+def serialize_json_field(val):
+    if isinstance(val, (dict, list)):
+        return json.dumps(val)
+    if isinstance(val, str):
+        return val
+    return "{}"
+
+
+def parse_json_field(val, default):
+    if not val:
+        return default
+    if isinstance(val, (dict, list)):
+        return val
+    try:
+        return json.loads(val)
+    except Exception:
+        return default
+
+
+@router.get("/templates")
+def admin_list_templates(
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Lists all global templates for admin management."""
+    templates = (
+        db.query(ResumeTemplate)
+        .filter(ResumeTemplate.is_global == True, ResumeTemplate.is_deleted == False)
+        .order_by(ResumeTemplate.display_order.asc(), ResumeTemplate.id.asc())
+        .all()
+    )
+    out = []
+    for t in templates:
+        out.append({
+            "id": t.id,
+            "template_key": t.template_key or f"tpl-{t.id}",
+            "name": t.name,
+            "description": t.description or "",
+            "category": t.category or "Standard",
+            "badge": t.badge or "",
+            "min_plan_tier": t.min_plan_tier or "free",
+            "is_global": t.is_global,
+            "display_order": t.display_order,
+            "is_active": t.is_active,
+            "settings_json": parse_json_field(t.settings_json, {}),
+            "header_style_json": parse_json_field(t.header_style_json, {}),
+            "section_defaults_json": parse_json_field(t.section_defaults_json, {}),
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        })
+    return out
+
+
+@router.post("/templates")
+def admin_create_template(
+    payload: AdminTemplateCreate,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Creates a new global system template with specified tier access."""
+    tpl_key = (payload.template_key or payload.name.lower().replace(" ", "-")).strip()
+    existing = db.query(ResumeTemplate).filter(ResumeTemplate.template_key == tpl_key, ResumeTemplate.is_deleted == False).first()
+    if existing:
+        tpl_key = f"{tpl_key}-{int(datetime.utcnow().timestamp())}"
+
+    tmpl = ResumeTemplate(
+        user_id=None,
+        is_global=True,
+        template_key=tpl_key,
+        name=payload.name,
+        description=payload.description,
+        category=payload.category or "Standard",
+        badge=payload.badge or "",
+        min_plan_tier=payload.min_plan_tier,
+        settings_json=serialize_json_field(payload.settings_json),
+        header_style_json=serialize_json_field(payload.header_style_json),
+        section_defaults_json=serialize_json_field(payload.section_defaults_json),
+        display_order=payload.display_order,
+        is_active=payload.is_active,
+    )
+    db.add(tmpl)
+    db.commit()
+    db.refresh(tmpl)
+    return {
+        "success": True,
+        "message": "Template created successfully",
+        "id": tmpl.id,
+        "template_key": tmpl.template_key,
+    }
+
+
+@router.put("/templates/{template_id}")
+def admin_update_template(
+    template_id: int,
+    payload: AdminTemplateUpdate,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Updates an existing global template's tier requirement, badge, styling, or active status."""
+    tmpl = db.query(ResumeTemplate).filter(ResumeTemplate.id == template_id, ResumeTemplate.is_deleted == False).first()
+    if not tmpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    if payload.name is not None:
+        tmpl.name = payload.name
+    if payload.description is not None:
+        tmpl.description = payload.description
+    if payload.category is not None:
+        tmpl.category = payload.category
+    if payload.badge is not None:
+        tmpl.badge = payload.badge
+    if payload.min_plan_tier is not None:
+        tmpl.min_plan_tier = payload.min_plan_tier
+    if payload.display_order is not None:
+        tmpl.display_order = payload.display_order
+    if payload.is_active is not None:
+        tmpl.is_active = payload.is_active
+    if payload.settings_json is not None:
+        tmpl.settings_json = serialize_json_field(payload.settings_json)
+    if payload.header_style_json is not None:
+        tmpl.header_style_json = serialize_json_field(payload.header_style_json)
+    if payload.section_defaults_json is not None:
+        tmpl.section_defaults_json = serialize_json_field(payload.section_defaults_json)
+
+    db.commit()
+    db.refresh(tmpl)
+    return {
+        "success": True,
+        "message": "Template updated successfully",
+        "id": tmpl.id,
+        "template_key": tmpl.template_key,
+        "min_plan_tier": tmpl.min_plan_tier,
+    }
+
+
+@router.delete("/templates/{template_id}")
+def admin_delete_template(
+    template_id: int,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Soft-deletes a global template."""
+    tmpl = db.query(ResumeTemplate).filter(ResumeTemplate.id == template_id, ResumeTemplate.is_deleted == False).first()
+    if not tmpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+    tmpl.is_deleted = True
+    tmpl.deleted_at = datetime.utcnow()
+    db.commit()
+    return {"success": True, "message": "Template soft-deleted"}
+
+
+@router.get("/tiers")
+def admin_list_tiers(
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Lists all configured subscription tiers and pricing parameters."""
+    tiers = db.query(PlanTierConfig).order_by(PlanTierConfig.display_order.asc()).all()
+    out = []
+    for t in tiers:
+        features = parse_json_field(t.features_json, [])
+        out.append({
+            "id": t.id,
+            "tier_key": t.tier_key,
+            "name": t.name,
+            "tagline": t.tagline or "",
+            "badge": t.badge or "",
+            "base_price_inr": t.base_price_inr,
+            "discount_price_inr": t.discount_price_inr if t.discount_price_inr is not None else t.base_price_inr,
+            "discount_percent": t.discount_percent or 0,
+            "billing_period_text": t.billing_period_text or "",
+            "duration_days": t.duration_days,
+            "resume_limit": t.resume_limit,
+            "export_limit": t.export_limit,
+            "wiser_ai_limit": t.wiser_ai_limit,
+            "wiser_job_help_limit": t.wiser_job_help_limit,
+            "wiser_ats_limit": t.wiser_ats_limit,
+            "custom_template_limit": t.custom_template_limit,
+            "premium_templates_allowed": t.premium_templates_allowed,
+            "features": features,
+            "is_active": t.is_active,
+            "display_order": t.display_order,
+        })
+    return out
+
+
+@router.put("/tiers/{tier_key}")
+def admin_update_tier(
+    tier_key: str,
+    payload: PlanTierConfigUpdate,
+    current_admin: User = Depends(require_admin),
+    db: Session = Depends(get_db)
+):
+    """Updates pricing, quotas, features, or duration for a specific plan tier."""
+    tier = db.query(PlanTierConfig).filter(PlanTierConfig.tier_key == tier_key).first()
+    if not tier:
+        raise HTTPException(status_code=404, detail=f"Tier '{tier_key}' not found.")
+
+    if payload.name is not None:
+        tier.name = payload.name
+    if payload.tagline is not None:
+        tier.tagline = payload.tagline
+    if payload.badge is not None:
+        tier.badge = payload.badge
+    if payload.base_price_inr is not None:
+        tier.base_price_inr = payload.base_price_inr
+    if payload.discount_price_inr is not None:
+        tier.discount_price_inr = payload.discount_price_inr
+    if payload.discount_percent is not None:
+        tier.discount_percent = payload.discount_percent
+    if payload.billing_period_text is not None:
+        tier.billing_period_text = payload.billing_period_text
+    if payload.duration_days is not None:
+        tier.duration_days = payload.duration_days
+    if payload.resume_limit is not None:
+        tier.resume_limit = payload.resume_limit
+    if payload.export_limit is not None:
+        tier.export_limit = payload.export_limit
+    if payload.wiser_ai_limit is not None:
+        tier.wiser_ai_limit = payload.wiser_ai_limit
+    if payload.wiser_job_help_limit is not None:
+        tier.wiser_job_help_limit = payload.wiser_job_help_limit
+    if payload.wiser_ats_limit is not None:
+        tier.wiser_ats_limit = payload.wiser_ats_limit
+    if payload.custom_template_limit is not None:
+        tier.custom_template_limit = payload.custom_template_limit
+    if payload.premium_templates_allowed is not None:
+        tier.premium_templates_allowed = payload.premium_templates_allowed
+    if payload.features is not None:
+        tier.features_json = json.dumps(payload.features)
+    if payload.is_active is not None:
+        tier.is_active = payload.is_active
+    if payload.display_order is not None:
+        tier.display_order = payload.display_order
+
+    tier.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(tier)
+
+    return {
+        "success": True,
+        "message": f"Tier '{tier_key}' updated successfully.",
+        "tier_key": tier.tier_key,
+        "price_inr": tier.discount_price_inr if tier.discount_price_inr is not None else tier.base_price_inr,
+    }

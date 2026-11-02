@@ -106,3 +106,13 @@ def get_current_user(
         raise credentials_exception
 
     return user
+
+
+def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    db: Session = Depends(get_db),
+) -> Optional[User]:
+    """Optional dependency that returns the User if Bearer token is provided and valid, else None."""
+    if not credentials or not credentials.credentials:
+        return None
+    return get_user_from_token(credentials.credentials, db)

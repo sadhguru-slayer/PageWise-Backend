@@ -11,11 +11,13 @@ from ..schemas import (
     JDAnalyzeRequest, ATSAnalyzeRequest, ResumeCloneRequest,
     TemplateCreate, TemplateOut, UsageStats
 )
-from ..auth import get_current_user
+from ..auth import get_current_user, get_current_user_optional
 from ..services.subscription import (
     enforce_resume_limit,
     enforce_wiser_ai_limit,
     enforce_template_limit,
+    enforce_template_access,
+    is_template_unlocked_for_tier,
     increment_wiser_ai_usage,
     get_user_active_workspace_ids,
     enforce_resume_edit_permission,
@@ -23,6 +25,8 @@ from ..services.subscription import (
     require_template_quota,
     require_wiser_job_help_quota,
     require_wiser_ats_quota,
+    get_or_create_subscription,
+    TIER_LEVELS,
 )
 
 router = APIRouter(prefix="/api/resumes", tags=["Resumes"])
@@ -95,6 +99,9 @@ def create_resume(
 ):
     """Creates a new resume for the currently authenticated user."""
     enforce_resume_limit(db, current_user)
+
+    if payload.template_key or payload.template_id:
+        enforce_template_access(db, current_user, payload.template_key or payload.template_id)
 
     existing_count = (
         db.query(Resume)
@@ -860,6 +867,53 @@ def clone_resume(
 # ─── User Template CRUD ────────────────────────────────────────────────────────
 
 templates_router = APIRouter(prefix="/api/templates", tags=["Templates"])
+
+
+@templates_router.get("/system")
+def list_system_templates(
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    """
+    Returns all global system-wide templates with dynamically calculated
+    'is_locked' and 'min_plan_tier' based on user's current subscription tier.
+    """
+    user_tier = "free"
+    if current_user:
+        sub = get_or_create_subscription(db, current_user.id)
+        user_tier = sub.plan_type
+
+    templates = (
+        db.query(ResumeTemplate)
+        .filter(
+            ResumeTemplate.is_global == True,
+            ResumeTemplate.is_active == True,
+            ResumeTemplate.is_deleted == False
+        )
+        .order_by(ResumeTemplate.display_order.asc(), ResumeTemplate.id.asc())
+        .all()
+    )
+
+    out = []
+    for t in templates:
+        unlocked = is_template_unlocked_for_tier(user_tier, t.min_plan_tier or "free")
+        out.append({
+            "id": t.id,
+            "template_key": t.template_key or f"tpl-{t.id}",
+            "name": t.name,
+            "description": t.description or "",
+            "category": t.category or "Standard",
+            "badge": t.badge or "",
+            "min_plan_tier": t.min_plan_tier or "free",
+            "is_locked": not unlocked,
+            "user_unlocked": unlocked,
+            "display_order": t.display_order,
+            "settings_json": parse_json_field(t.settings_json, {}),
+            "header_style_json": parse_json_field(t.header_style_json, {}),
+            "section_defaults_json": parse_json_field(t.section_defaults_json, {}),
+            "created_at": t.created_at.isoformat() if t.created_at else None,
+        })
+    return out
 
 
 @templates_router.get("", response_model=List[TemplateOut])

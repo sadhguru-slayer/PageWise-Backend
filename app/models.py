@@ -64,18 +64,28 @@ class Resume(Base):
 
 
 class ResumeTemplate(Base):
-    """User-saved style templates (fonts, margins, colors, section defaults)."""
+    """User-saved and system global style templates (fonts, margins, colors, section defaults)."""
     __tablename__ = "resume_templates"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(String(500), nullable=True)
+    template_key = Column(String(100), nullable=True, index=True)
 
     # Style data stored as JSON strings
     settings_json = Column(Text, default="{}")       # page settings (margins, fonts, sizes)
     header_style_json = Column(Text, default="{}")   # header style (alignment, fonts, divider)
     section_defaults_json = Column(Text, default="{}") # section heading defaults
+
+    # Global / System template & Tier restriction fields
+    is_global = Column(Boolean, default=False, nullable=False, index=True)
+    min_plan_tier = Column(String(50), default="free", nullable=False)  # "free", "day_pass", "pro_monthly"
+    badge = Column(String(100), nullable=True)                          # "Free Standard", "Day Pass", "Pro Exclusive"
+    category = Column(String(255), nullable=True)                       # "Traditional", "Tech & AI", "Leadership"
+    preview_thumbnail = Column(String(255), nullable=True)
+    display_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True, nullable=False)
 
     # ─── Soft Deletion & Audit ────────────────────────────────────────────────
     is_deleted = Column(Boolean, default=False, nullable=False, index=True)
@@ -201,4 +211,43 @@ class PaymentOrder(Base):
 
     # Relationships
     user = relationship("User", back_populates="payment_orders")
+
+
+class PlanTierConfig(Base):
+    """
+    Dynamic subscription tier configurations managed by Admin.
+    Defines limits, pricing, discounts, and marketing features.
+    """
+    __tablename__ = "plan_tier_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tier_key = Column(String(50), unique=True, index=True, nullable=False)  # "free", "day_pass", "pro_monthly"
+    name = Column(String(100), nullable=False)                             # "Pagewise Free", "Wiser Day Pass", "Pagewise Pro"
+    tagline = Column(String(255), nullable=True)
+    badge = Column(String(100), nullable=True)
+
+    # Pricing in INR
+    base_price_inr = Column(Integer, default=0, nullable=False)            # regular price (e.g. 0, 99, 299)
+    discount_price_inr = Column(Integer, default=0, nullable=False)        # actual charged price (e.g. 0, 49, 199)
+    discount_percent = Column(Integer, default=0)                          # e.g. 50%
+    billing_period_text = Column(String(50), default="forever")            # "forever", "one-time purchase (24 hours)", "/ month"
+    duration_days = Column(Integer, nullable=True)                         # None (forever), 1 (Day pass), 30 (Pro monthly)
+
+    # Tier Allowance & Quota Limits
+    resume_limit = Column(Integer, default=1, nullable=False)
+    export_limit = Column(Integer, default=1, nullable=False)
+    wiser_ai_limit = Column(Integer, default=1, nullable=False)            # combined
+    wiser_job_help_limit = Column(Integer, default=1, nullable=False)
+    wiser_ats_limit = Column(Integer, default=1, nullable=False)
+    custom_template_limit = Column(Integer, default=1, nullable=False)
+    premium_templates_allowed = Column(Integer, default=1, nullable=False) # 1 standard, 3 for Day pass, 999 for Pro
+
+    # Feature checklist (JSON array string)
+    features_json = Column(Text, default="[]", nullable=False)
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    display_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 

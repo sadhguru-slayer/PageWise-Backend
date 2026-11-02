@@ -1,12 +1,16 @@
 import threading
+import json
 from datetime import datetime, timedelta
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List, Optional
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status, Depends
 
 from ..database import get_db
 from ..auth import get_current_user
-from ..models import User, Subscription, PlanType, Resume, ResumeTemplate, ExportedResume, AIUsageLog
+from ..models import (
+    User, Subscription, PlanType, Resume, ResumeTemplate, ExportedResume,
+    AIUsageLog, PlanTierConfig
+)
 
 # Thread-safe re-entrant lock for concurrency-safe quota evaluations and atomic counter updates
 quota_lock = threading.RLock()
@@ -85,6 +89,77 @@ PLAN_CONFIGS: Dict[str, Dict[str, Any]] = {
     }
 }
 
+TIER_LEVELS = {
+    PlanType.FREE: 0,
+    PlanType.DAY_PASS: 1,
+    PlanType.PRO_MONTHLY: 2,
+}
+
+
+def get_tier_config(db: Session, tier_key: str) -> Dict[str, Any]:
+    """Retrieves tier config from database PlanTierConfig table or fallback PLAN_CONFIGS."""
+    try:
+        record = (
+            db.query(PlanTierConfig)
+            .filter(PlanTierConfig.tier_key == tier_key, PlanTierConfig.is_active == True)
+            .first()
+        )
+        if record:
+            features = json.loads(record.features_json) if record.features_json else []
+            return {
+                "id": record.tier_key,
+                "tier_key": record.tier_key,
+                "name": record.name,
+                "tagline": record.tagline or "",
+                "badge": record.badge or "",
+                "price_inr": record.discount_price_inr if record.discount_price_inr is not None else record.base_price_inr,
+                "base_price_inr": record.base_price_inr,
+                "discount_price_inr": record.discount_price_inr,
+                "discount_percent": record.discount_percent,
+                "billing_period_text": record.billing_period_text,
+                "duration_days": record.duration_days,
+                "resume_limit": record.resume_limit,
+                "export_limit": record.export_limit,
+                "wiser_ai_limit": record.wiser_ai_limit,
+                "wiser_job_help_limit": record.wiser_job_help_limit,
+                "wiser_ats_limit": record.wiser_ats_limit,
+                "custom_template_limit": record.custom_template_limit,
+                "premium_templates_allowed": record.premium_templates_allowed,
+                "features": features,
+            }
+    except Exception as e:
+        print("[get_tier_config] Error loading dynamic tier from DB:", e)
+    return PLAN_CONFIGS.get(tier_key, PLAN_CONFIGS[PlanType.FREE])
+
+
+def is_template_unlocked_for_tier(user_tier: str, min_plan_tier: str) -> bool:
+    """Calculates whether a template is unlocked for the user's active tier level."""
+    user_level = TIER_LEVELS.get(user_tier, 0)
+    req_level = TIER_LEVELS.get(min_plan_tier, 0)
+    return user_level >= req_level
+
+
+def enforce_template_access(db: Session, user: User, template_id_or_key: Any):
+    """
+    Validates whether the user's active tier is allowed to use this template architecture.
+    Applies to both system templates and custom user templates.
+    """
+    sub = get_or_create_subscription(db, user.id)
+    tmpl = None
+    if isinstance(template_id_or_key, int) or (isinstance(template_id_or_key, str) and template_id_or_key.isdigit()):
+        tmpl = db.query(ResumeTemplate).filter(ResumeTemplate.id == int(template_id_or_key), ResumeTemplate.is_deleted == False).first()
+    elif isinstance(template_id_or_key, str):
+        tmpl = db.query(ResumeTemplate).filter(ResumeTemplate.template_key == template_id_or_key, ResumeTemplate.is_deleted == False).first()
+
+    if tmpl and tmpl.is_global:
+        if not is_template_unlocked_for_tier(sub.plan_type, tmpl.min_plan_tier):
+            req_name = "Wiser Day Pass" if tmpl.min_plan_tier == PlanType.DAY_PASS else "Pagewise Pro"
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"The '{tmpl.name}' architecture requires {req_name}. Please upgrade your plan to unlock."
+            )
+
+
 
 def get_or_create_subscription(db: Session, user_id: int) -> Subscription:
     """Retrieves the user's subscription record or creates a default Free one."""
@@ -131,7 +206,7 @@ def get_or_create_subscription(db: Session, user_id: int) -> Subscription:
 def get_user_plan_status(db: Session, user: User) -> Dict[str, Any]:
     """Returns active subscription plan details and current quota usages."""
     sub = get_or_create_subscription(db, user.id)
-    plan_config = PLAN_CONFIGS.get(sub.plan_type, PLAN_CONFIGS[PlanType.FREE])
+    plan_config = get_tier_config(db, sub.plan_type)
 
     # Count active workspace resumes
     active_resumes_count = (
@@ -203,7 +278,7 @@ def get_user_active_workspace_ids(db: Session, user: User):
     based on the user's plan limit and primary selection.
     """
     sub = get_or_create_subscription(db, user.id)
-    plan_config = PLAN_CONFIGS.get(sub.plan_type, PLAN_CONFIGS[PlanType.FREE])
+    plan_config = get_tier_config(db, sub.plan_type)
     limit = plan_config["resume_limit"]
 
     resumes = (
@@ -231,7 +306,7 @@ def enforce_resume_edit_permission(db: Session, user: User, resume_id: int):
     active_ids = get_user_active_workspace_ids(db, user)
     if resume_id not in active_ids:
         sub = get_or_create_subscription(db, user.id)
-        plan_config = PLAN_CONFIGS.get(sub.plan_type, PLAN_CONFIGS[PlanType.FREE])
+        plan_config = get_tier_config(db, sub.plan_type)
         limit = plan_config["resume_limit"]
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -293,7 +368,7 @@ def enforce_wiser_ai_limit(db: Session, user: User, action_type: str = "wiser_jo
     """Enforces Wiser AI limits (Job Help vs ATS check)."""
     with quota_lock:
         sub = get_or_create_subscription(db, user.id)
-        plan_config = PLAN_CONFIGS.get(sub.plan_type, PLAN_CONFIGS[PlanType.FREE])
+        plan_config = get_tier_config(db, sub.plan_type)
 
         if sub.plan_type == PlanType.FREE:
             # Free tier: 1 combined evaluation allowance covering both Job Help and ATS
