@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from ..database import get_db
+from ..config import ENVIRONMENT, DATABASE_URL
 from ..models import (
     User, Resume, ResumeTemplate, ExportedResume, AIUsageLog,
-    Subscription, PaymentOrder, PlanType, PlanTierConfig, Feedback
+    Subscription, PaymentOrder, PlanType, PlanTierConfig, Feedback, CustomSectionSchema
 )
 from ..auth import get_current_user, hash_password, verify_password, create_access_token
 from ..schemas import (
@@ -28,7 +29,7 @@ from ..schemas import (
     FeedbackOut,
     FeedbackAdminUpdate,
     FeedbackListResponse,
-    FeedbackStats,
+    FeedbackStats, CustomSectionSchemaCreate, CustomSectionSchemaUpdate, CustomSectionSchemaOut,
 )
 from ..services.subscription import (
     PLAN_CONFIGS,
@@ -556,7 +557,9 @@ def get_admin_insights(
         exports=exports_stat,
         custom_templates=templates_stat,
         resumes=resumes_stat,
-        branched_resumes=branched_stat
+        branched_resumes=branched_stat,
+        environment=ENVIRONMENT,
+        database_type='sqlite' if 'sqlite' in str(DATABASE_URL).lower() else 'postgresql'
     )
 
 
@@ -609,6 +612,8 @@ def admin_list_templates(
             "settings_json": parse_json_field(t.settings_json, {}),
             "header_style_json": parse_json_field(t.header_style_json, {}),
             "section_defaults_json": parse_json_field(t.section_defaults_json, {}),
+            "section_schema_json": parse_json_field(t.section_schema_json, {}),
+            "schema_version": t.schema_version or 1,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         })
     return out
@@ -638,6 +643,8 @@ def admin_create_template(
         settings_json=serialize_json_field(payload.settings_json),
         header_style_json=serialize_json_field(payload.header_style_json),
         section_defaults_json=serialize_json_field(payload.section_defaults_json),
+        section_schema_json=serialize_json_field(payload.section_schema_json or {}),
+        schema_version=payload.schema_version or 1,
         display_order=payload.display_order,
         is_active=payload.is_active,
     )
@@ -684,6 +691,10 @@ def admin_update_template(
         tmpl.header_style_json = serialize_json_field(payload.header_style_json)
     if payload.section_defaults_json is not None:
         tmpl.section_defaults_json = serialize_json_field(payload.section_defaults_json)
+    if payload.section_schema_json is not None:
+        tmpl.section_schema_json = serialize_json_field(payload.section_schema_json)
+    if payload.schema_version is not None:
+        tmpl.schema_version = payload.schema_version
 
     db.commit()
     db.refresh(tmpl)
@@ -1700,3 +1711,96 @@ def get_admin_ai_usage_stats(
         "by_model": model_summary,
         "top_users": top_users,
     }
+
+
+# ─── Custom Section Schemas / Section Maker Endpoints ─────────────────────────
+
+@router.get("/section-schemas", response_model=List[CustomSectionSchemaOut])
+def list_custom_section_schemas(
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin)
+):
+    """List all registered custom section schemas."""
+    return (
+        db.query(CustomSectionSchema)
+        .order_by(CustomSectionSchema.display_order.asc(), CustomSectionSchema.id.asc())
+        .all()
+    )
+
+
+@router.post("/section-schemas", response_model=CustomSectionSchemaOut, status_code=status.HTTP_201_CREATED)
+def create_custom_section_schema(
+    payload: CustomSectionSchemaCreate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin)
+):
+    """Create a new custom section schema from raw JSON definitions."""
+    existing = db.query(CustomSectionSchema).filter(CustomSectionSchema.section_key == payload.section_key.strip().lower()).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Section key '{payload.section_key}' is already registered.")
+
+    raw_fields = payload.fields_json
+    if isinstance(raw_fields, (dict, list)):
+        raw_fields = json.dumps(raw_fields)
+
+    schema_obj = CustomSectionSchema(
+        section_key=payload.section_key.strip().lower(),
+        label=payload.label.strip(),
+        icon=payload.icon or "FileText",
+        description=payload.description,
+        is_repeatable=payload.is_repeatable,
+        fields_json=raw_fields,
+        is_active=payload.is_active,
+        display_order=payload.display_order,
+    )
+    db.add(schema_obj)
+    db.commit()
+    db.refresh(schema_obj)
+    return schema_obj
+
+
+@router.put("/section-schemas/{schema_id}", response_model=CustomSectionSchemaOut)
+def update_custom_section_schema(
+    schema_id: int,
+    payload: CustomSectionSchemaUpdate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin)
+):
+    """Update an existing custom section schema."""
+    schema_obj = db.query(CustomSectionSchema).filter(CustomSectionSchema.id == schema_id).first()
+    if not schema_obj:
+        raise HTTPException(status_code=404, detail="Section schema not found.")
+
+    if payload.label is not None:
+        schema_obj.label = payload.label.strip()
+    if payload.icon is not None:
+        schema_obj.icon = payload.icon
+    if payload.description is not None:
+        schema_obj.description = payload.description
+    if payload.is_repeatable is not None:
+        schema_obj.is_repeatable = payload.is_repeatable
+    if payload.fields_json is not None:
+        schema_obj.fields_json = json.dumps(payload.fields_json) if isinstance(payload.fields_json, (dict, list)) else str(payload.fields_json)
+    if payload.display_order is not None:
+        schema_obj.display_order = payload.display_order
+    if payload.is_active is not None:
+        schema_obj.is_active = payload.is_active
+
+    db.commit()
+    db.refresh(schema_obj)
+    return schema_obj
+
+
+@router.delete("/section-schemas/{schema_id}", status_code=status.HTTP_200_OK)
+def delete_custom_section_schema(
+    schema_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin)
+):
+    """Delete a custom section schema."""
+    schema_obj = db.query(CustomSectionSchema).filter(CustomSectionSchema.id == schema_id).first()
+    if not schema_obj:
+        raise HTTPException(status_code=404, detail="Section schema not found.")
+    db.delete(schema_obj)
+    db.commit()
+    return {"message": "Custom section schema deleted successfully", "id": schema_id}

@@ -202,7 +202,7 @@ async def async_generate_json(
         except asyncio.TimeoutError:
             elapsed = time.time() - t0
             print(f"[Wiser AI] Model {model_name} timed out after {elapsed:.2f}s, trying fallback...")
-            last_error = f"{model_name} timed out after {elapsed:.2f}s"
+            last_error = f"Wiser AI timed out after {elapsed:.2f}s"
         except Exception as e:
             elapsed = time.time() - t0
             print(f"[Wiser AI] Model {model_name} failed ({elapsed:.2f}s): {e}, trying fallback...")

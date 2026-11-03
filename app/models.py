@@ -79,6 +79,10 @@ class ResumeTemplate(Base):
     header_style_json = Column(Text, default="{}")   # header style (alignment, fonts, divider)
     section_defaults_json = Column(Text, default="{}") # section heading defaults
 
+    # Schema-driven section requirements & schema version
+    section_schema_json = Column(Text, default="{}")   # configurable section & field requirements
+    schema_version = Column(Integer, default=1, nullable=False)
+
     # Global / System template & Tier restriction fields
     is_global = Column(Boolean, default=False, nullable=False, index=True)
     min_plan_tier = Column(String(50), default="free", nullable=False)  # "free", "day_pass", "pro_monthly"
@@ -288,4 +292,28 @@ class Feedback(Base):
 
     # Relationships
     user = relationship("User", back_populates="feedbacks")
+
+
+class CustomSectionSchema(Base):
+    """
+    Admin-defined or system-level custom section schemas.
+    Allows administrators to define, validate, and publish custom structured sections
+    with raw JSON schemas that are usable by both the builder and the AI parser.
+    """
+    __tablename__ = "custom_section_schemas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    section_key = Column(String(100), unique=True, nullable=False, index=True)  # e.g. "publications", "patents"
+    label = Column(String(150), nullable=False)                                # e.g. "Publications & Papers"
+    icon = Column(String(50), default="FileText", nullable=False)
+    description = Column(String(255), nullable=True)
+    is_repeatable = Column(Boolean, default=True, nullable=False)
+
+    # Raw JSON schema of fields: [{ key, label, type, required, placeholder, gridSpan }]
+    fields_json = Column(Text, default="[]", nullable=False)
+
+    is_active = Column(Boolean, default=True, nullable=False)
+    display_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

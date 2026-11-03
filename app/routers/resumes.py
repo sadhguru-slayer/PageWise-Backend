@@ -33,6 +33,33 @@ from ..services.subscription import (
 router = APIRouter(prefix="/api/resumes", tags=["Resumes"])
 
 
+@router.get("/ai-health")
+async def check_ai_health(current_user: Optional[User] = Depends(get_current_user_optional)):
+    """
+    Returns the real-time operational status and model readiness of the Wiser / Gemini AI engine.
+    """
+    from ..wiser_runtime import MODELS_TO_TRY, get_gemini_client
+    try:
+        get_gemini_client()
+        return {
+            "status": "healthy",
+            "available": True,
+            "engine": "Wiser AI / Gemini",
+            "models": MODELS_TO_TRY,
+            "active_model": MODELS_TO_TRY[0] if MODELS_TO_TRY else "default",
+            "message": "AI Engine is operational."
+        }
+    except Exception as e:
+        return {
+            "status": "degraded",
+            "available": False,
+            "engine": "Wiser AI / Gemini",
+            "models": MODELS_TO_TRY,
+            "error": str(e),
+            "message": "AI Engine configuration or credentials unavailable."
+        }
+
+
 def serialize_json_field(val) -> str:
     """Helper to ensure a field is stored as a valid JSON string."""
     if isinstance(val, (dict, list)):
@@ -502,11 +529,26 @@ async def parse_pdf_resume(
         parsed_data = await async_parse_resume_with_wiser_ai(extracted_text, allow_bold_text=allow_bold)
         print("[parse-pdf] Wiser AI parsing completed successfully.")
     except ValueError as ve:
-        print(f"[parse-pdf] Configuration/Validation Error: {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
+        err_msg = str(ve)
+        print(f"[parse-pdf] Configuration/Validation Error: {err_msg}")
+        raise HTTPException(status_code=400, detail=err_msg)
     except Exception as ge:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Wiser AI extraction failed: {str(ge)}")
+        err_raw = str(ge)
+        err_lower = err_raw.lower()
+        if "rate" in err_lower or "429" in err_lower or "quota" in err_lower or "resource_exhausted" in err_lower:
+            detail_msg = "Gemini AI rate limit reached. Please wait a few seconds and try again."
+            status_c = 429
+        elif "api_key" in err_lower or "credential" in err_lower or "unauthenticated" in err_lower or "403" in err_lower:
+            detail_msg = "AI engine authentication error. Please verify the Gemini API configuration."
+            status_c = 503
+        elif "timeout" in err_lower or "deadline" in err_lower:
+            detail_msg = "AI engine request timed out. Please try uploading again."
+            status_c = 504
+        else:
+            detail_msg = f"AI extraction error: {err_raw}"
+            status_c = 500
+        raise HTTPException(status_code=status_c, detail=detail_msg)
 
     # Deduct / increment Wiser AI usage counter
     increment_wiser_ai_usage(db, current_user, action_type="wiser_pdf_import")
@@ -996,6 +1038,8 @@ def list_system_templates(
             "settings_json": parse_json_field(t.settings_json, {}),
             "header_style_json": parse_json_field(t.header_style_json, {}),
             "section_defaults_json": parse_json_field(t.section_defaults_json, {}),
+            "section_schema_json": parse_json_field(t.section_schema_json, {}),
+            "schema_version": t.schema_version or 1,
             "created_at": t.created_at.isoformat() if t.created_at else None,
         })
     return out
@@ -1030,6 +1074,8 @@ def save_template(
         settings_json=serialize_json_field(payload.settings_json),
         header_style_json=serialize_json_field(payload.header_style_json),
         section_defaults_json=serialize_json_field(payload.section_defaults_json),
+        section_schema_json=serialize_json_field(payload.section_schema_json or {}),
+        schema_version=payload.schema_version or 1,
     )
     db.add(tmpl)
     db.commit()

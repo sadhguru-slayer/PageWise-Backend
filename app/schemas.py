@@ -197,6 +197,8 @@ class TemplateCreate(BaseModel):
     settings_json: Any = {}
     header_style_json: Any = {}
     section_defaults_json: Any = {}
+    section_schema_json: Optional[Any] = {}
+    schema_version: Optional[int] = 1
 
 
 class TemplateOut(BaseModel):
@@ -208,6 +210,8 @@ class TemplateOut(BaseModel):
     settings_json: Any
     header_style_json: Any
     section_defaults_json: Any
+    section_schema_json: Optional[Any] = {}
+    schema_version: Optional[int] = 1
     is_global: bool = False
     min_plan_tier: str = "free"
     badge: Optional[str] = None
@@ -230,6 +234,8 @@ class AdminTemplateCreate(BaseModel):
     settings_json: Any = {}
     header_style_json: Any = {}
     section_defaults_json: Any = {}
+    section_schema_json: Optional[Any] = {}
+    schema_version: Optional[int] = 1
     display_order: int = 0
     is_active: bool = True
 
@@ -243,6 +249,8 @@ class AdminTemplateUpdate(BaseModel):
     settings_json: Optional[Any] = None
     header_style_json: Optional[Any] = None
     section_defaults_json: Optional[Any] = None
+    section_schema_json: Optional[Any] = None
+    schema_version: Optional[int] = None
     display_order: Optional[int] = None
     is_active: Optional[bool] = None
 
@@ -480,8 +488,9 @@ class AdminInsightsResponse(BaseModel):
     custom_templates: MetricStat
     resumes: MetricStat
     branched_resumes: MetricStat
-
     lifetime_wiser_invocations: int = 0
+    environment: Optional[str] = "development"
+    database_type: Optional[str] = "sqlite"
 
 
 # ─── Feedback Schemas (In-house & Scalable) ──────────────────────────────────
@@ -548,4 +557,55 @@ class FeedbackStats(BaseModel):
     avg_rating: Optional[float] = None
     by_category: dict = {}
     by_status: dict = {}
+
+
+# ─── Custom Section Schema Schemas ───────────────────────────────────────────
+
+class CustomSectionSchemaCreate(BaseModel):
+    section_key: str = Field(..., min_length=2, max_length=100)
+    label: str = Field(..., min_length=1, max_length=150)
+    icon: Optional[str] = "FileText"
+    description: Optional[str] = None
+    is_repeatable: bool = True
+    fields_json: Any = []
+    display_order: int = 0
+    is_active: bool = True
+
+
+class CustomSectionSchemaUpdate(BaseModel):
+    label: Optional[str] = None
+    icon: Optional[str] = None
+    description: Optional[str] = None
+    is_repeatable: Optional[bool] = None
+    fields_json: Optional[Any] = None
+    display_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class CustomSectionSchemaOut(BaseModel):
+    id: int
+    section_key: str
+    label: str
+    icon: str
+    description: Optional[str] = None
+    is_repeatable: bool
+    fields_json: Any
+    is_active: bool
+    display_order: int
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator("fields_json", mode="before")
+    @classmethod
+    def parse_fields(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:
+                return []
+        return v or []
+
+    class Config:
+        from_attributes = True
+
 

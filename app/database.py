@@ -61,6 +61,10 @@ def run_auto_migrations():
                     conn.execute(text("ALTER TABLE resume_templates ADD COLUMN display_order INTEGER DEFAULT 0 NOT NULL"))
                 if "is_active" not in tmpl_cols:
                     conn.execute(text("ALTER TABLE resume_templates ADD COLUMN is_active BOOLEAN DEFAULT 1 NOT NULL"))
+                if "section_schema_json" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN section_schema_json TEXT DEFAULT '{}'"))
+                if "schema_version" not in tmpl_cols:
+                    conn.execute(text("ALTER TABLE resume_templates ADD COLUMN schema_version INTEGER DEFAULT 1 NOT NULL"))
 
             # Plan tier configs additions
             if "plan_tier_configs" in existing_tables:
