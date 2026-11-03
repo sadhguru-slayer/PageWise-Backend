@@ -202,7 +202,7 @@ def _build_jd_prompt(
     job_description: str,
     current_resume: Dict[str, Any],
     previous_resumes: Optional[List[Dict[str, Any]]] = None,
-    allow_bold_text: bool = False
+    allow_bold_text: bool = True
 ) -> str:
     compact = compact_resume(current_resume)
     previous_resumes_block = compact_previous_resumes(previous_resumes, limit=2)
@@ -229,7 +229,7 @@ def _build_jd_prompt(
 
 def _build_ats_prompt(
     current_resume: Dict[str, Any],
-    allow_bold_text: bool = False
+    allow_bold_text: bool = True
 ) -> str:
     compact = compact_resume(current_resume)
     prompt_template = load_prompt("wiser_ats.prompt")
@@ -251,7 +251,7 @@ async def async_analyze_jd_and_ats(
     job_description: str,
     current_resume: Dict[str, Any],
     previous_resumes: Optional[List[Dict[str, Any]]] = None,
-    allow_bold_text: bool = False
+    allow_bold_text: bool = True
 ) -> Dict[str, Any]:
     """
     Non-blocking async Job Description matching + ATS check + bullet enhancements.
@@ -267,7 +267,7 @@ def analyze_jd_and_ats(
     job_description: str,
     current_resume: Dict[str, Any],
     previous_resumes: Optional[List[Dict[str, Any]]] = None,
-    allow_bold_text: bool = False
+    allow_bold_text: bool = True
 ) -> Dict[str, Any]:
     """
     Synchronous Job Description matching + ATS check + bullet enhancements.
@@ -281,7 +281,7 @@ def analyze_jd_and_ats(
 
 async def async_analyze_standalone_ats(
     current_resume: Dict[str, Any],
-    allow_bold_text: bool = False
+    allow_bold_text: bool = True
 ) -> Dict[str, Any]:
     """
     Non-blocking async standalone ATS audit without a job description.
@@ -295,7 +295,7 @@ async def async_analyze_standalone_ats(
 
 def analyze_standalone_ats(
     current_resume: Dict[str, Any],
-    allow_bold_text: bool = False
+    allow_bold_text: bool = True
 ) -> Dict[str, Any]:
     """
     Synchronous standalone ATS audit without a job description.

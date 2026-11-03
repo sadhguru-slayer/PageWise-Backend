@@ -72,7 +72,7 @@ def extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return combined_text
 
 
-def _build_parse_prompt(extracted_text: str, allow_bold_text: bool = False) -> str:
+def _build_parse_prompt(extracted_text: str, allow_bold_text: bool = True) -> str:
     prompt_template = load_prompt("resume_parser.prompt")
 
     if allow_bold_text:
@@ -407,7 +407,7 @@ def _post_process_parsed_data(parsed_data: dict) -> dict:
     return parsed_data
 
 
-async def async_parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = False) -> dict:
+async def async_parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = True) -> dict:
     """
     Non-blocking async parser using Wiser AI engine.
     """
@@ -418,7 +418,7 @@ async def async_parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text:
     return _post_process_parsed_data(parsed_data)
 
 
-def parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = False) -> dict:
+def parse_resume_with_wiser_ai(extracted_text: str, allow_bold_text: bool = True) -> dict:
     """
     Synchronous fallback parser using Wiser AI engine.
     """

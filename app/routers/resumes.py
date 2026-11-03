@@ -525,7 +525,7 @@ async def parse_pdf_resume(
     try:
         print("[parse-pdf] Sending extracted text to Wiser AI...")
         user_prefs = parse_json_field(current_user.preferences_json, {})
-        allow_bold = bool(user_prefs.get("allow_bold_text", False))
+        allow_bold = bool(user_prefs.get("allow_bold_text", True))
         parsed_data = await async_parse_resume_with_wiser_ai(extracted_text, allow_bold_text=allow_bold)
         print("[parse-pdf] Wiser AI parsing completed successfully.")
     except ValueError as ve:
@@ -731,7 +731,7 @@ async def analyze_job_description(
 
     try:
         user_prefs = parse_json_field(current_user.preferences_json, {})
-        allow_bold = bool(user_prefs.get("allow_bold_text", False))
+        allow_bold = bool(user_prefs.get("allow_bold_text", True))
         analysis_result = await async_analyze_jd_and_ats(
             job_description=payload.job_description,
             current_resume=current_resume_dict,
@@ -842,7 +842,7 @@ async def analyze_standalone_resume_ats(
 
     try:
         user_prefs = parse_json_field(current_user.preferences_json, {})
-        allow_bold = bool(user_prefs.get("allow_bold_text", False))
+        allow_bold = bool(user_prefs.get("allow_bold_text", True))
         analysis_result = await async_analyze_standalone_ats(
             current_resume=current_resume_dict,
             allow_bold_text=allow_bold

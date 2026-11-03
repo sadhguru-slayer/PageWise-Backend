@@ -155,6 +155,7 @@ def register(payload: UserRegister, db: Session = Depends(get_db)):
         name=username,
         email=normalized_email,
         hashed_password=hashed_pwd,
+        preferences_json={"allow_bold_text": True},
     )
     db.add(user)
     db.commit()
