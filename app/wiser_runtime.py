@@ -69,13 +69,36 @@ def clean_markdown_json(raw_text: str) -> str:
     return text
 
 
-def strip_html(value: Any, max_chars: int = 2500) -> str:
+def extract_plain_text(value: Any) -> str:
+    """Extract human-readable plain text from TipTap JSON dict, JSON string, or HTML."""
     if value is None:
         return ""
     if isinstance(value, dict):
-        value = json.dumps(value)
-    text = re.sub(r"<[^>]+>", " ", str(value))
-    text = re.sub(r"\s+", " ", text).strip()
+        if value.get("type") == "text":
+            return value.get("text", "")
+        texts = []
+        for child in value.get("content", []):
+            t = extract_plain_text(child)
+            if t:
+                texts.append(t)
+        return " ".join(texts)
+    if isinstance(value, list):
+        return " ".join(extract_plain_text(item) for item in value)
+    if isinstance(value, str):
+        val_trim = value.strip()
+        if (val_trim.startswith("{") and val_trim.endswith("}")) or (val_trim.startswith("[") and val_trim.endswith("]")):
+            try:
+                parsed = json.loads(val_trim)
+                return extract_plain_text(parsed)
+            except Exception:
+                pass
+        text = re.sub(r"<[^>]+>", " ", value)
+        return re.sub(r"\s+", " ", text).strip()
+    return str(value)
+
+
+def strip_html(value: Any, max_chars: int = 2500) -> str:
+    text = extract_plain_text(value)
     if len(text) > max_chars:
         return text[:max_chars] + "…"
     return text
@@ -102,11 +125,14 @@ def compact_header(header: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 def compact_sections(sections: Optional[List[Dict[str, Any]]], max_chars: int = 3500) -> List[Dict[str, Any]]:
     compact = []
     for sec in sections or []:
-        html = sec.get("contentHtml") or sec.get("content") or ""
+        raw = sec.get("content") or sec.get("contentHtml") or ""
+        text = extract_plain_text(raw)
+        if not text and sec.get("contentHtml"):
+            text = extract_plain_text(sec.get("contentHtml"))
         compact.append({
             "id": sec.get("id"),
             "title": sec.get("title"),
-            "contentHtml": strip_html(html, max_chars=max_chars),
+            "contentHtml": text[:max_chars] if len(text) > max_chars else text,
         })
     return compact
 

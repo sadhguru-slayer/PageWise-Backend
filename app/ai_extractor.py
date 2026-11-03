@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 import pymupdf
 
@@ -89,38 +90,113 @@ def _build_parse_prompt(extracted_text: str, allow_bold_text: bool = False) -> s
     return prompt
 
 
+def _clean_url(u: str) -> str:
+    if not u:
+        return ""
+    return re.sub(r"^https?://(www\.)?", "", str(u).strip().lower().rstrip("/"))
+
+
 def _post_process_parsed_data(parsed_data: dict) -> dict:
-    # Standardize header with clickable hyperlinks
     hdr = parsed_data.get("header", {})
+    sections = parsed_data.get("sections", [])
+
+    # Check for portfolio / links section
+    portfolio_sec_idx = None
+    for idx, sec in enumerate(sections):
+        title = (sec.get("title") or "").strip().lower()
+        if re.search(r"^(portfolio|links|portfolio links|websites|profiles|social links|online presence)$", title):
+            portfolio_sec_idx = idx
+            break
+
+    portfolio_links = []
+    if portfolio_sec_idx is not None:
+        p_sec = sections[portfolio_sec_idx]
+        portfolio_links = p_sec.get("links", []) or []
+
+    hdr_custom_links = hdr.get("customLinks", []) or []
+
+    # Count distinct portfolio links
+    all_portfolio_urls = []
+    for l in portfolio_links + hdr_custom_links:
+        u = l.get("url") if isinstance(l, dict) else str(l)
+        cu = _clean_url(u)
+        if cu and cu not in all_portfolio_urls:
+            all_portfolio_urls.append(cu)
+
+    total_p_links_count = len(all_portfolio_urls)
+    has_portfolio_section = portfolio_sec_idx is not None
+
+    # Decision:
+    # If <= 3 portfolio links: put them in Header, remove the portfolio section
+    # If >= 4 portfolio links: keep the Section, do NOT duplicate in Header
+    keep_in_header = not has_portfolio_section or (total_p_links_count <= 3)
+
+    if has_portfolio_section:
+        if keep_in_header:
+            existing_urls = {_clean_url(l.get("url")) for l in hdr_custom_links if isinstance(l, dict)}
+            for l in portfolio_links:
+                if isinstance(l, dict):
+                    cu = _clean_url(l.get("url"))
+                    if cu and cu not in existing_urls:
+                        hdr_custom_links.append(l)
+                        existing_urls.add(cu)
+            hdr["customLinks"] = hdr_custom_links
+            sections.pop(portfolio_sec_idx)
+        else:
+            hdr["customLinks"] = []
+
+    seen_keys = set()
     contact_parts = []
+
     if hdr.get("location"):
         contact_parts.append(str(hdr["location"]).strip())
+
     if hdr.get("email"):
         email = str(hdr["email"]).strip()
+        seen_keys.add(_clean_url(email))
         contact_parts.append(f'<a href="mailto:{email}" target="_blank" rel="noopener noreferrer">{email}</a>')
+
     if hdr.get("phone"):
         contact_parts.append(str(hdr["phone"]).strip())
+
     if hdr.get("website"):
         url = str(hdr["website"]).strip()
-        full_url = url if url.startswith("http") else f"https://{url}"
-        contact_parts.append(f'<a href="{full_url}" target="_blank" rel="noopener noreferrer">Portfolio</a>')
+        cu = _clean_url(url)
+        if cu and cu not in seen_keys:
+            seen_keys.add(cu)
+            full_url = url if url.startswith("http") else f"https://{url}"
+            contact_parts.append(f'<a href="{full_url}" target="_blank" rel="noopener noreferrer">Portfolio</a>')
+
     if hdr.get("linkedin"):
         li = str(hdr["linkedin"]).strip()
-        full_li = li if li.startswith("http") else f"https://linkedin.com/in/{li.replace('linkedin.com/in/', '')}"
-        contact_parts.append(f'<a href="{full_li}" target="_blank" rel="noopener noreferrer">LinkedIn</a>')
+        cu = _clean_url(li)
+        if cu and cu not in seen_keys:
+            seen_keys.add(cu)
+            clean_li = re.sub(r"^https?://(www\.)?linkedin\.com/in/", "", li, flags=re.IGNORECASE)
+            full_li = f"https://linkedin.com/in/{clean_li}"
+            contact_parts.append(f'<a href="{full_li}" target="_blank" rel="noopener noreferrer">LinkedIn</a>')
+
     if hdr.get("github"):
         gh = str(hdr["github"]).strip()
-        full_gh = gh if gh.startswith("http") else f"https://github.com/{gh.replace('github.com/', '')}"
-        contact_parts.append(f'<a href="{full_gh}" target="_blank" rel="noopener noreferrer">GitHub</a>')
+        cu = _clean_url(gh)
+        if cu and cu not in seen_keys:
+            seen_keys.add(cu)
+            clean_gh = re.sub(r"^https?://(www\.)?github\.com/", "", gh, flags=re.IGNORECASE)
+            full_gh = f"https://github.com/{clean_gh}"
+            contact_parts.append(f'<a href="{full_gh}" target="_blank" rel="noopener noreferrer">GitHub</a>')
 
-    for link in hdr.get("customLinks", []):
-        if link.get("label") and link.get("url"):
-            contact_parts.append(f'<a href="{link["url"]}" target="_blank" rel="noopener noreferrer">{link["label"]}</a>')
+    if keep_in_header:
+        for link in hdr.get("customLinks", []):
+            if isinstance(link, dict) and link.get("url"):
+                raw_url = link["url"]
+                cu = _clean_url(raw_url)
+                if cu and cu not in seen_keys:
+                    seen_keys.add(cu)
+                    label = link.get("label") or "Portfolio"
+                    full_u = raw_url if raw_url.startswith("http") else f"https://{raw_url}"
+                    contact_parts.append(f'<a href="{full_u}" target="_blank" rel="noopener noreferrer">{label}</a>')
 
-    if contact_parts:
-        hdr["contactLine"] = " · ".join(contact_parts)
-    elif not hdr.get("contactLine"):
-        hdr["contactLine"] = ""
+    hdr["contactLine"] = " · ".join(contact_parts)
 
     if "alignment" not in hdr:
         hdr["alignment"] = "center"
@@ -137,9 +213,10 @@ def _post_process_parsed_data(parsed_data: dict) -> dict:
             "style": "solid",
         }
     parsed_data["header"] = hdr
+    parsed_data["sections"] = sections
 
     # Ensure sections have unique string IDs and both 'content' & 'contentHtml'
-    for idx, sec in enumerate(parsed_data.get("sections", [])):
+    for idx, sec in enumerate(sections):
         if "id" not in sec or not sec["id"]:
             sec["id"] = f"sec-{uuid.uuid4().hex[:6]}"
         sec["order"] = idx
