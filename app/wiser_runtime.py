@@ -35,10 +35,20 @@ MODEL_ROUTING = {
 FALLBACK_MODEL = "sarvam-105b"
 
 # Active test configuration: Sarvam AI is primary for testing; other LLMs disabled for now
-USE_SARVAM_PRIMARY = True
+USE_SARVAM_PRIMARY = False
 
-PARSE_MODELS = [MODEL_ROUTING["pdf_correction"]]
-JD_REASONING_MODELS = [MODEL_ROUTING["jd_edit"]]
+PARSE_MODELS = [
+    "models/gemini-3.5-flash-lite",
+    "models/gemini-3.8-flash",
+    "models/gemini-3.5-flash",
+    "models/gemini-3.1-flash-lite",
+]
+JD_REASONING_MODELS = [
+    "models/gemini-3.8-flash",
+    "models/gemini-3.5-flash",
+    "models/gemini-3.5-flash-lite",
+    "models/gemini-3.1-flash-lite",
+]
 MODELS_TO_TRY = PARSE_MODELS
 
 _primary_client: Optional[genai.Client] = None
@@ -561,54 +571,54 @@ async def async_generate_json(
     """
     exec_result: Optional[Dict[str, Any]] = None
 
-    # ── Tier 1: Primary invocation ──────────────────────────────────────────
-    if USE_SARVAM_PRIMARY:
-        print(f"[Wiser AI] Invoking Sarvam AI ({FALLBACK_MODEL}) as primary provider...")
-        exec_result = await _execute_sarvam_completion(prompt, temperature=0.0, timeout=90.0)
-        if not exec_result or not (exec_result.get("text") or "").strip():
-            print(f"[Wiser AI Fallback] Sarvam AI returned empty response. Activating Gemini fallback ({MODEL_ROUTING.get(task, 'models/gemini-3.8-flash')})...")
-            exec_result = None
+    if task == "jd":
+        models_to_use = JD_REASONING_MODELS
+        thinking_budget = 1024
+        eff_timeout = max(timeout, 30.0)
+    else:
+        models_to_use = PARSE_MODELS
+        thinking_budget = None
+        eff_timeout = timeout
 
-    # ── Tier 2: Gemini (Active when USE_SARVAM_PRIMARY is False or as fallback) ─
+    # ── Tier 1: Primary Gemini Key (models in sequence) ────────────────────
+    primary_client = get_gemini_client("primary")
+    if primary_client:
+        exec_result = await _execute_gemini_models(
+            primary_client,
+            prompt,
+            temperature=temperature,
+            timeout=eff_timeout,
+            key_label="GEMINI_API_KEY (Primary)",
+            model_list=models_to_use,
+            thinking_budget=thinking_budget,
+        )
+
+    # ── Tier 2: Secondary Gemini Key Backup (models in sequence) ───────────
     if not exec_result:
-        if task == "jd":
-            models_to_use = JD_REASONING_MODELS
-            thinking_budget = 1024
-            eff_timeout = max(timeout, 30.0)
-        else:
-            models_to_use = PARSE_MODELS
-            thinking_budget = None
-            eff_timeout = timeout
-
-        primary_client = get_gemini_client("primary")
-        if primary_client:
+        secondary_client = get_gemini_client("secondary")
+        if secondary_client:
+            print("[Wiser AI Fallback] Primary Gemini key chains exhausted. Activating Tier 2: GEMINI_API_KEY_2 backup...")
             exec_result = await _execute_gemini_models(
-                primary_client,
+                secondary_client,
                 prompt,
                 temperature=temperature,
                 timeout=eff_timeout,
-                key_label="GEMINI_API_KEY (Primary)",
+                key_label="GEMINI_API_KEY_2 (Secondary Backup)",
                 model_list=models_to_use,
                 thinking_budget=thinking_budget,
             )
 
-        if not exec_result:
-            secondary_client = get_gemini_client("secondary")
-            if secondary_client:
-                print("[Wiser AI Fallback] Primary Gemini unavailable. Activating Tier 2: GEMINI_API_KEY_2...")
-                exec_result = await _execute_gemini_models(
-                    secondary_client,
-                    prompt,
-                    temperature=temperature,
-                    timeout=eff_timeout,
-                    key_label="GEMINI_API_KEY_2 (Secondary Backup)",
-                    model_list=models_to_use,
-                    thinking_budget=thinking_budget,
-                )
+    # ── Tier 3: Sarvam AI Fallback ─────────────────────────────────────────
+    if not exec_result:
+        sarvam_key = os.getenv("SARVAM_API_KEY") or os.getenv("SARVAM_AI_API_KEY")
+        if sarvam_key:
+            print(f"[Wiser AI Fallback] Gemini key chains exhausted. Activating Tier 3: Sarvam AI ({FALLBACK_MODEL}) backup...")
+            exec_result = await _execute_sarvam_completion(prompt, temperature=0.0, timeout=90.0)
 
     if not exec_result:
         raise RuntimeError(
-            "Wiser AI request failed: Sarvam AI is primary and failed or returned invalid response."
+            "Wiser AI request failed across all configured LLM providers (GEMINI_API_KEY, GEMINI_API_KEY_2, SARVAM_API_KEY). "
+            "Please check API quotas or network availability."
         )
 
     response_text = exec_result["text"]
