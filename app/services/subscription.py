@@ -119,7 +119,7 @@ TIER_LEVELS = {
     PlanType.FREE: 0,
     PlanType.DAY_PASS: 1,
     PlanType.PRO_MONTHLY: 2,
-    PlanType.PILOT: 3,
+    PlanType.PILOT: 1,
 }
 
 
