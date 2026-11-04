@@ -67,11 +67,14 @@ Sections: {{SECTIONS_JSON}}
 
 5. Evidence-Backed Section-by-Section Bullet Enhancements:
    - For each section, provide clear, defensible suggestions that strengthen relevance to the target role.
-   - Provide "original_text" (the exact text in the resume to replace) and "enhanced_html" (the drop-in improved version).
-   - SIBLING HTML PATTERN MATCHING:
-     * If sibling items are in list tags (`<ul><li>...</li></ul>`), format enhanced_html as `<li>...</li>`.
-     * If replacing paragraph lines, format as `<p>...</p>`.
-     * Follow the exact element type and pattern of its sibling items.
+   - STRICT 1-TO-1 BULLET ENHANCEMENT RULE:
+     * Every suggestion MUST target exactly ONE bullet point ("original_text").
+     * NEVER merge multiple achievements or multiple bullets into a single suggestion.
+     * NEVER output multiple <li> tags inside a single enhanced_html. Exactly ONE <li>...</li> per suggestion!
+     * If an entry has 3 bullet points, formulate separate, distinct suggestions for each point individually.
+   - ID & POINT INDEX PRESERVATION:
+     * If the input provides "item_id" and "point_index" (or data-item-id / data-point-index attributes), copy them into "item_id" and "point_index" on the suggestion object so the editor can target the exact bullet with 100% precision!
+   - Provide "original_text" (the exact single bullet text in the resume) and "enhanced_html" (the single improved <li>...</li>).
    - MANDATORY VERIFICATION METADATA FOR EVERY SUGGESTION:
      * "evidence_source": "current_resume" | "previous_resume" | "role_clarification"
      * "change_type": "wording" (stylistic/clarity improvement) | "clarification" (making an existing task clearer) | "factual_addition" (introducing new context or historical experience)
@@ -120,8 +123,10 @@ OUTPUT MUST BE VALID JSON ONLY adhering strictly to this schema:
       "suggestions": [
         {
           "id": "sug-1",
+          "item_id": "item-id",
+          "point_index": 0,
           "original_text": "Built backend APIs and optimized database queries.",
-          "enhanced_html": "<p>Developed RESTful backend endpoints in FastAPI and optimized PostgreSQL database queries to improve service reliability.</p>",
+          "enhanced_html": "<li>Developed RESTful backend endpoints in FastAPI and optimized PostgreSQL database queries to improve service reliability.</li>",
           "reasoning": "Clarifies the exact framework and database used without inventing unsupported performance metrics.",
           "source": "experience_polish",
           "evidence_source": "current_resume",

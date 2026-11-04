@@ -1631,6 +1631,16 @@ def get_admin_ai_usage_logs(
     logs_out = []
     for log, u_name, u_email in results:
         meta = parse_json_field(log.meta_json, {})
+        in_tok = log.input_tokens
+        if in_tok is None:
+            in_tok = meta.get("input_tokens") or 0
+        out_tok = log.output_tokens
+        if out_tok is None:
+            out_tok = meta.get("output_tokens") or 0
+        total_tok = log.tokens_used or 0
+        if total_tok == 0 and (in_tok or out_tok):
+            total_tok = in_tok + out_tok
+
         logs_out.append({
             "id": log.id,
             "user_id": log.user_id,
@@ -1639,7 +1649,11 @@ def get_admin_ai_usage_logs(
             "resume_id": log.resume_id,
             "action_type": log.action_type,
             "ai_model": log.ai_model or "gemini-2.5-flash",
-            "tokens_used": log.tokens_used or 0,
+            "tokens_used": total_tok,
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "prompt_tokens": in_tok,
+            "completion_tokens": out_tok,
             "meta": meta,
             "created_at": log.created_at.isoformat() if log.created_at else None,
         })
@@ -1663,16 +1677,30 @@ def get_admin_ai_usage_stats(
     """
     total_calls = db.query(AIUsageLog).count()
     total_tokens = db.query(func.coalesce(func.sum(AIUsageLog.tokens_used), 0)).scalar() or 0
+    total_input_tokens = db.query(func.coalesce(func.sum(AIUsageLog.input_tokens), 0)).scalar() or 0
+    total_output_tokens = db.query(func.coalesce(func.sum(AIUsageLog.output_tokens), 0)).scalar() or 0
 
     by_action = db.query(
         AIUsageLog.action_type,
         func.count(AIUsageLog.id).label("calls"),
-        func.coalesce(func.sum(AIUsageLog.tokens_used), 0).label("tokens")
+        func.coalesce(func.sum(AIUsageLog.tokens_used), 0).label("tokens"),
+        func.coalesce(func.sum(AIUsageLog.input_tokens), 0).label("input_tokens"),
+        func.coalesce(func.sum(AIUsageLog.output_tokens), 0).label("output_tokens")
     ).group_by(AIUsageLog.action_type).all()
 
     action_summary = {}
-    for a, c, t in by_action:
-        action_summary[a] = {"calls": c, "tokens": t}
+    for row in by_action:
+        a = row[0]
+        c = row[1]
+        t = row[2]
+        in_t = row[3] if len(row) > 3 else 0
+        out_t = row[4] if len(row) > 4 else 0
+        action_summary[a] = {
+            "calls": c,
+            "tokens": t,
+            "input_tokens": in_t,
+            "output_tokens": out_t
+        }
 
     by_model = db.query(
         AIUsageLog.ai_model,
@@ -1707,6 +1735,10 @@ def get_admin_ai_usage_stats(
     return {
         "total_calls": total_calls,
         "total_tokens": total_tokens,
+        "total_input_tokens": total_input_tokens,
+        "total_output_tokens": total_output_tokens,
+        "prompt_tokens": total_input_tokens,
+        "completion_tokens": total_output_tokens,
         "by_action": action_summary,
         "by_model": model_summary,
         "top_users": top_users,

@@ -20,6 +20,7 @@ PyMuPDF
 weasyprint
 
 google-genai
+sarvamai
 httpx
 
 google-api-python-client

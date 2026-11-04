@@ -59,10 +59,13 @@ Sections: {{SECTIONS_JSON}}
 5. Grounded Section-by-Section Bullet Enhancements:
    - Identify weak, passive, or vague bullet points.
    - Formulate upgraded, clear replacements that preserve factual meaning.
-   - SIBLING HTML PATTERN MATCHING:
-     * If sibling items are in list tags (`<ul><li>...</li></ul>`), format enhanced_html as `<li>...</li>`.
-     * If replacing paragraph lines, format as `<p>...</p>`.
-     * Follow the exact element type and pattern of its sibling items.
+   - STRICT 1-TO-1 BULLET ENHANCEMENT RULE:
+     * Every suggestion MUST target exactly ONE bullet point ("original_text").
+     * NEVER merge multiple achievements or multiple bullets into a single suggestion.
+     * Exactly ONE <li>...</li> per suggestion! Never output multiple <li> tags inside a single enhanced_html.
+     * If an entry has multiple points, formulate separate distinct suggestions for each point individually.
+   - ID & POINT INDEX PRESERVATION:
+     * If the input provides "item_id" and "point_index", copy them into "item_id" and "point_index" on the suggestion object for 100% precision!
    - MANDATORY VERIFICATION METADATA FOR EVERY SUGGESTION:
      * "evidence_source": "current_resume" | "general_polish"
      * "change_type": "wording" | "clarification" | "factual_addition"
@@ -111,8 +114,10 @@ OUTPUT MUST BE VALID JSON ONLY adhering strictly to this schema:
       "suggestions": [
         {
           "id": "sug-ats-1",
+          "item_id": "item-id",
+          "point_index": 0,
           "original_text": "Maintained backend services and fixed database bugs.",
-          "enhanced_html": "<p>Maintained production backend services and resolved database query bottlenecks to ensure API reliability.</p>",
+          "enhanced_html": "<li>Maintained production backend services and resolved database query bottlenecks to ensure API reliability.</li>",
           "reasoning": "Replaces vague phrasing with active engineering terminology while strictly preserving factual scope.",
           "source": "wiser_bullet_polish",
           "evidence_source": "current_resume",

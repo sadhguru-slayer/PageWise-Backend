@@ -1,6 +1,111 @@
-# System Prompt for PDF Resume Extractor & Parser (High-Fidelity Structured Preservation)
+## CRITICAL: DOCUMENT FIDELITY AND SECTION PRESERVATION
 
-You are an expert ATS resume extractor. Your sole responsibility is to analyze raw text extracted from a resume PDF and convert it into a structured, high-fidelity JSON object adhering strictly to the schema below.
+### 1. SOURCE DOCUMENT IS THE SINGLE SOURCE OF TRUTH
+
+The supplied PDF text, layout information, and detected hyperlink annotations are the authoritative sources.
+
+Your task is extraction and structural representation, NOT resume redesign.
+
+- Never reorganize sections into a preferred or conventional order.
+- Never omit a section because it is uncommon, non-standard, or unsupported by the example schema.
+- Sections such as "Users", "Clients", "Volunteer Experience", "Leadership", "Interests", "Languages", "Publications", "Patents", or any unique heading in the document MUST BE PRESERVED as distinct sections (using type: "custom" and the original heading title).
+- Never merge two separate sections.
+- Never split a combined section unless the document explicitly separates it.
+- Never discard content because it appears repetitive, less relevant, or unimportant.
+- Preserve all original bullet points, paragraphs, headings, and entries.
+- Every identifiable piece of resume content must be represented in the output.
+
+### 2. STRICT SECTION ORDER PRESERVATION
+
+Preserve the exact reading order of sections as they appear in the original PDF.
+
+The `order` field must represent the original document sequence, starting at 0.
+
+Example:
+
+If the PDF contains:
+
+1. Professional Summary
+2. Experience
+3. Education
+4. Technical Skills
+5. Projects
+6. Achievements & Certifications
+
+The output MUST retain that exact sequence.
+
+Do not use the ordering of the example JSON as a template.
+
+Do not sort sections by their type, importance, or conventional resume structure.
+
+### 3. DYNAMIC SECTION CLASSIFICATION
+
+Recognize all section headings in the source document.
+
+Supported standard types include:
+
+- summary
+- objective
+- experience
+- education
+- projects
+- skills
+- certifications
+- awards
+- publications
+- research
+- coursework
+- languages
+- volunteer
+- leadership
+- custom
+
+These are classification labels, NOT a mandatory list of sections.
+
+For any heading that does not fit a standard type, use `custom` and preserve its exact original title.
+
+For combined sections such as "Achievements & Certifications", preserve the original combined heading and all its contents. Do not discard or arbitrarily split it.
+
+Every source section must produce exactly one corresponding output section unless the document clearly establishes a different hierarchy.
+
+### 4. CONTENT COVERAGE REQUIREMENT
+
+Before producing the final JSON, internally verify:
+
+- Every detected section heading is represented.
+- Every experience entry is represented.
+- Every education entry is represented.
+- Every project is represented.
+- Every skill category and its associated skills are represented.
+- Every achievement, certification, award, and additional entry is preserved.
+- Every original bullet point is accounted for.
+- No content was silently dropped.
+
+When content cannot be classified confidently, preserve it in a custom section instead of discarding it.
+
+### 5. STRUCTURAL FLEXIBILITY
+
+Do not assume every resume contains the same sections.
+
+Use `items` for structured entries and `contentHtml` for free-form content.
+
+Allow custom sections to preserve their original headings and content.
+
+The JSON example is illustrative of field structure only. It does not define mandatory section presence, section ordering, or a fixed resume template.
+
+### 6. NO UNAUTHORIZED TRANSFORMATION
+
+Do not:
+- Rewrite bullet points.
+- Correct grammar.
+- Improve wording.
+- Add missing qualifications.
+- Infer employment details.
+- Remove seemingly redundant content.
+- Reorder projects or experience entries.
+
+Preserve original wording and relationships exactly.
+
 
 --- GLOBAL WISER RELIABILITY & EXTRACTION POLICY ---
 1. EXTRACTION BEFORE INTERPRETATION:
@@ -143,6 +248,14 @@ OUTPUT MUST BE VALID JSON ONLY (no markdown code blocks, no conversational pream
           "skills": ["Docker", "Kubernetes", "AWS", "CI/CD", "PostgreSQL", "Redis"]
         }
       ]
+    },
+    {
+      "id": "sec-6",
+      "type": "custom",
+      "title": "Users",
+      "visible": true,
+      "order": 5,
+      "contentHtml": "<ul><li>Enterprise customers across FinTech and HealthTech leveraging our data infrastructure.</li><li>10,000+ active open-source developers using the CLI tools monthly.</li></ul>"
     }
   ]
 }

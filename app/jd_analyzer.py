@@ -81,9 +81,24 @@ def _verify_and_sanitize_analysis(
             if not isinstance(suggestions, list):
                 continue
             valid_suggestions = []
-            for sug in suggestions:
-                if not isinstance(sug, dict):
+            expanded_suggestions = []
+            for raw_sug in suggestions:
+                if not isinstance(raw_sug, dict):
                     continue
+                raw_enhanced = raw_sug.get("enhanced_html") or ""
+                # Check if model returned multiple <li> tags in one suggestion
+                li_matches = re.findall(r"<li[^>]*>(.*?)</li>", raw_enhanced, re.DOTALL | re.IGNORECASE)
+                if len(li_matches) > 1:
+                    # Model merged multiple points into 1 suggestion! Split into discrete 1-to-1 suggestions
+                    for sub_idx, li_content in enumerate(li_matches):
+                        cloned = dict(raw_sug)
+                        cloned["id"] = f"{raw_sug.get('id', 'sug')}-{sub_idx}"
+                        cloned["enhanced_html"] = f"<li>{li_content.strip()}</li>"
+                        expanded_suggestions.append(cloned)
+                else:
+                    expanded_suggestions.append(raw_sug)
+
+            for sug in expanded_suggestions:
                 orig = (sug.get("original_text") or "").strip()
                 orig_clean = re.sub(r"<[^>]+>", " ", orig).strip().lower()
 
@@ -100,6 +115,21 @@ def _verify_and_sanitize_analysis(
 
                 valid_suggestions.append(sug)
                 enhanced = (sug.get("enhanced_html") or "").strip()
+
+                # Ensure bullet format (<li>) for experience and projects or list-like originals
+                sec_title_lower = (sec.get("section_title") or "").lower()
+                is_list_section = any(k in sec_title_lower for k in ["experience", "work", "employment", "project", "leadership", "volunteer", "activity"])
+                looks_like_bullet = orig.startswith("<li") or orig.startswith("•") or orig.startswith("-") or orig.startswith("*")
+
+                if (is_list_section or looks_like_bullet) and enhanced:
+                    if enhanced.startswith("<p>") and enhanced.endswith("</p>"):
+                        inner = enhanced[3:-4].strip()
+                        enhanced = f"<li>{inner}</li>"
+                        sug["enhanced_html"] = enhanced
+                    elif not enhanced.startswith("<li"):
+                        enhanced = f"<li>{enhanced}</li>"
+                        sug["enhanced_html"] = enhanced
+
                 clean_enhanced = re.sub(r"<[^>]+>", " ", enhanced).strip()
 
                 # Extract metric tokens from suggestion
@@ -258,7 +288,7 @@ async def async_analyze_jd_and_ats(
     """
     prompt = _build_jd_prompt(job_description, current_resume, previous_resumes, allow_bold_text)
     print("[Wiser JD-ATS Help] Executing async Wiser AI query...")
-    data = await async_generate_json(prompt, temperature=0.0)
+    data = await async_generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
     return _verify_and_sanitize_analysis(data, current_resume, job_description)
 
@@ -274,7 +304,7 @@ def analyze_jd_and_ats(
     """
     prompt = _build_jd_prompt(job_description, current_resume, previous_resumes, allow_bold_text)
     print("[Wiser JD-ATS Help] Executing sync Wiser AI query...")
-    data = generate_json(prompt, temperature=0.0)
+    data = generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
     return _verify_and_sanitize_analysis(data, current_resume, job_description)
 
@@ -288,7 +318,7 @@ async def async_analyze_standalone_ats(
     """
     prompt = _build_ats_prompt(current_resume, allow_bold_text)
     print("[Wiser Standalone ATS] Executing async Wiser AI query...")
-    data = await async_generate_json(prompt, temperature=0.0)
+    data = await async_generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
     return _verify_and_sanitize_analysis(data, current_resume)
 
@@ -302,6 +332,6 @@ def analyze_standalone_ats(
     """
     prompt = _build_ats_prompt(current_resume, allow_bold_text)
     print("[Wiser Standalone ATS] Executing sync Wiser AI query...")
-    data = generate_json(prompt, temperature=0.0)
+    data = generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
     return _verify_and_sanitize_analysis(data, current_resume)

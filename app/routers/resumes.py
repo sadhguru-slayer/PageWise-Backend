@@ -517,6 +517,9 @@ async def parse_pdf_resume(
         content = await file.read()
         print(f"[parse-pdf] Read {len(content)} bytes from PDF. Extracting text asynchronously...")
         extracted_text = await asyncio.to_thread(extract_text_from_pdf, content)
+        print("=========================================")
+        print("Extracted", extracted_text)
+        print("=========================================")
         print(f"[parse-pdf] Extracted {len(extracted_text)} characters of text from PDF.")
     except Exception as e:
         traceback.print_exc()
@@ -555,13 +558,27 @@ async def parse_pdf_resume(
 
     # Record AI Usage Audit Log
     try:
+        usage_info = parsed_data.pop("_usage", {}) if isinstance(parsed_data, dict) else {}
+        ai_model_name = parsed_data.pop("_ai_model", "Wiser AI Engine") if isinstance(parsed_data, dict) else "Wiser AI Engine"
+        in_tok = usage_info.get("input_tokens", 0)
+        out_tok = usage_info.get("output_tokens", 0)
+        tot_tok = usage_info.get("total_tokens", in_tok + out_tok)
+
         ai_log = AIUsageLog(
             user_id=current_user.id,
             resume_id=target_resume.id if target_resume else None,
             action_type="wiser_pdf_import",
-            ai_model="Wiser AI Engine",
-            tokens_used=len(extracted_text) // 4,
-            meta_json=json.dumps({"filename": file.filename})
+            ai_model=ai_model_name,
+            tokens_used=tot_tok,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            meta_json=json.dumps({
+                "filename": file.filename,
+                "input_tokens": in_tok,
+                "output_tokens": out_tok,
+                "total_tokens": tot_tok,
+                "model": ai_model_name,
+            })
         )
         db.add(ai_log)
         db.commit()
@@ -758,20 +775,30 @@ async def analyze_job_description(
                     db.commit()
 
         # Record Wiser AI Usage Log (Job Help)
-        analysis_result.pop("_ai_model", None)
-        ai_model_name = "Wiser AI Engine"
+        usage_info = analysis_result.pop("_usage", {}) if isinstance(analysis_result, dict) else {}
+        ai_model_name = analysis_result.pop("_ai_model", "Wiser AI Engine") if isinstance(analysis_result, dict) else "Wiser AI Engine"
         job_an = analysis_result.get("job_analysis", {})
         ats_ck = analysis_result.get("ats_check", {})
+        in_tok = usage_info.get("input_tokens", 0)
+        out_tok = usage_info.get("output_tokens", 0)
+        tot_tok = usage_info.get("total_tokens", in_tok + out_tok)
         meta = {
             "job_title": job_an.get("title"),
             "company": job_an.get("company"),
             "ats_score": ats_ck.get("overall_score"),
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "total_tokens": tot_tok,
+            "model": ai_model_name,
         }
         log_entry = AIUsageLog(
             user_id=current_user.id,
             resume_id=valid_res_id,
             action_type="wiser_job_help",
             ai_model=ai_model_name,
+            tokens_used=tot_tok,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
             meta_json=json.dumps(meta),
         )
         db.add(log_entry)
@@ -848,8 +875,8 @@ async def analyze_standalone_resume_ats(
             allow_bold_text=allow_bold
         )
 
-        analysis_result.pop("_ai_model", None)
-        ai_model_name = "Wiser AI Engine"
+        usage_info = analysis_result.pop("_usage", {}) if isinstance(analysis_result, dict) else {}
+        ai_model_name = analysis_result.pop("_ai_model", "Wiser AI Engine") if isinstance(analysis_result, dict) else "Wiser AI Engine"
         ats_ck = analysis_result.get("ats_check", {})
         inferred = analysis_result.get("inferred_domain", {})
 
@@ -868,15 +895,25 @@ async def analyze_standalone_resume_ats(
                     db.commit()
 
         # Log AI action for Wiser usage tracking
+        in_tok = usage_info.get("input_tokens", 0)
+        out_tok = usage_info.get("output_tokens", 0)
+        tot_tok = usage_info.get("total_tokens", in_tok + out_tok)
         meta = {
             "inferred_domain": inferred.get("title"),
             "ats_score": ats_ck.get("overall_score"),
+            "input_tokens": in_tok,
+            "output_tokens": out_tok,
+            "total_tokens": tot_tok,
+            "model": ai_model_name,
         }
         log_entry = AIUsageLog(
             user_id=current_user.id,
             resume_id=valid_res_id,
             action_type="wiser_ats_check",
             ai_model=ai_model_name,
+            tokens_used=tot_tok,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
             meta_json=json.dumps(meta),
         )
         db.add(log_entry)

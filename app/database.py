@@ -72,6 +72,14 @@ def run_auto_migrations():
                 if "is_archived" not in plan_cols:
                     conn.execute(text("ALTER TABLE plan_tier_configs ADD COLUMN is_archived BOOLEAN DEFAULT 0 NOT NULL"))
 
+            # AI Usage Logs additions
+            if "ai_usage_logs" in existing_tables:
+                ai_log_cols = [c["name"] for c in inspector.get_columns("ai_usage_logs")]
+                if "input_tokens" not in ai_log_cols:
+                    conn.execute(text("ALTER TABLE ai_usage_logs ADD COLUMN input_tokens INTEGER DEFAULT 0 NOT NULL"))
+                if "output_tokens" not in ai_log_cols:
+                    conn.execute(text("ALTER TABLE ai_usage_logs ADD COLUMN output_tokens INTEGER DEFAULT 0 NOT NULL"))
+
             # Feedbacks table auto-creation / column guarantee
             if "feedbacks" not in existing_tables:
                 try:

@@ -143,6 +143,8 @@ class AIUsageLog(Base):
     action_type = Column(String(50), nullable=False, index=True)  # "wiser_job_help", "wiser_ats_check", "wiser_pdf_import"
     ai_model = Column(String(100), nullable=True)
     tokens_used = Column(Integer, default=0)
+    input_tokens = Column(Integer, default=0, nullable=False)
+    output_tokens = Column(Integer, default=0, nullable=False)
     meta_json = Column(Text, default="{}")
 
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
