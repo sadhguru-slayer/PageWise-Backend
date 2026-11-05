@@ -45,7 +45,14 @@ docker compose -f docker-compose.prod.yaml --profile migration run --rm alembic
 docker compose --profile migration run --rm alembic alembic upgrade head
 
 # Production
+docker compose -f docker-compose.prod.yaml build --no-cache alembic
+
+docker compose -f docker-compose.prod.yaml --profile migration run --rm alembic ls alembic/versions/
+
+docker compose -f docker-compose.prod.yaml --profile migration run --rm alembic alembic heads
+
 docker compose -f docker-compose.prod.yaml --profile migration run --rm alembic alembic upgrade head
+
 ```
 
 ### 3. Check Migration Status & History
