@@ -32,7 +32,7 @@ MODEL_ROUTING = {
     "pdf_correction": "models/gemini-3.5-flash-lite",
 }
 
-FALLBACK_MODEL = "sarvam-105b"
+FALLBACK_MODEL = "sarvam-105b-conversations"
 
 # Active test configuration: Sarvam AI is primary for testing; other LLMs disabled for now
 USE_SARVAM_PRIMARY = False
@@ -157,53 +157,60 @@ def compact_header(header: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return {k: header.get(k) for k in keys if header.get(k)}
 
 
-def compact_sections(sections: Optional[List[Dict[str, Any]]], max_chars: int = 4500) -> List[Dict[str, Any]]:
+def compact_sections(
+    sections: Optional[List[Dict[str, Any]]],
+    max_chars: int = 4500,
+    applied_bullet_ids: Optional[Any] = None
+) -> List[Dict[str, Any]]:
+    applied_set = set(str(k) for k in (applied_bullet_ids or []))
     compact = []
     for sec in sections or []:
         items = sec.get("items") or []
         compact_items = []
-        html_parts = []
 
         if isinstance(items, list) and items:
             for it in items:
                 if not isinstance(it, dict):
                     continue
-                item_id = it.get("id") or ""
-                title = it.get("title") or it.get("project_title") or it.get("institution") or ""
-                company = it.get("company") or it.get("role") or ""
+                item_id = str(it.get("id") or "")
+                title = it.get("title") or it.get("project_title") or it.get("institution") or it.get("name") or it.get("category") or ""
+                company = it.get("company") or it.get("role") or it.get("issuer") or ""
                 summary = it.get("summary") or ""
                 pts = it.get("points") or []
+                skills = it.get("skills") or []
 
                 indexed_points = []
                 if isinstance(pts, list):
                     for b_idx, p in enumerate(pts):
                         if isinstance(p, str) and p.strip():
+                            bullet_key = f"{item_id}:{b_idx}"
+                            is_applied = (
+                                bullet_key in applied_set
+                                or (item_id and item_id in applied_set)
+                            )
+                            raw_p = p.strip()
+                            text_val = f"[ALREADY_ENHANCED] {raw_p}" if is_applied else raw_p
                             indexed_points.append({
                                 "point_index": b_idx,
-                                "text": p.strip()
+                                "text": text_val,
+                                "already_enhanced": is_applied,
                             })
 
-                compact_items.append({
+                item_dict = {
                     "item_id": item_id,
                     "title": title,
                     "company": company,
                     "summary": summary,
                     "points": indexed_points,
-                })
+                }
+                if isinstance(skills, list) and skills:
+                    item_dict["skills"] = [str(s) for s in skills if s]
 
-                header_line = f"<strong>{title}</strong>"
-                if company:
-                    header_line += f" | {company}"
-                if header_line != "<strong></strong>":
-                    html_parts.append(f"<p>{header_line}</p>")
-                if summary:
-                    html_parts.append(f"<p>{summary}</p>")
-                if indexed_points:
-                    lis = "".join(f"<li data-item-id=\"{item_id}\" data-point-index=\"{pt['point_index']}\">{pt['text']}</li>" for pt in indexed_points)
-                    html_parts.append(f"<ul>{lis}</ul>")
+                compact_items.append(item_dict)
 
-        content_html = "".join(html_parts)
-        if not content_html:
+        # Only use contentHtml if there are no structured items to avoid passing the same points twice to LLMs
+        content_html = ""
+        if not compact_items:
             content_html = sec.get("contentHtml") or sec.get("content") or ""
             if not isinstance(content_html, str):
                 content_html = extract_plain_text(content_html)
@@ -217,15 +224,21 @@ def compact_sections(sections: Optional[List[Dict[str, Any]]], max_chars: int = 
     return compact
 
 
-def compact_resume(resume: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def compact_resume(
+    resume: Optional[Dict[str, Any]],
+    applied_bullet_ids: Optional[Any] = None
+) -> Dict[str, Any]:
     resume = resume or {}
     header = resume.get("header_json") or resume.get("header") or {}
     sections = resume.get("sections_json") or resume.get("sections") or []
+    if not applied_bullet_ids:
+        applied_bullet_ids = resume.get("applied_bullet_ids") or resume.get("applied_suggestion_keys") or []
     return {
         "id": resume.get("id"),
         "name": resume.get("name"),
         "header_json": compact_header(header),
-        "sections_json": compact_sections(sections),
+        "sections_json": compact_sections(sections, applied_bullet_ids=applied_bullet_ids),
+        "applied_bullet_ids": list(applied_bullet_ids) if applied_bullet_ids else [],
     }
 
 
@@ -482,7 +495,8 @@ def _get_sarvam_client(sarvam_key: str):
 async def _execute_sarvam_completion(
     prompt: Any,
     temperature: float = 0.1,
-    timeout: float = 90.0
+    timeout: float = 90.0,
+    model_override: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Executes chat completion using the official SarvamAI Python SDK (sarvamai).
@@ -500,7 +514,7 @@ async def _execute_sarvam_completion(
     else:
         prompt_str = str(prompt)
 
-    model_name = os.getenv("SARVAM_MODEL", FALLBACK_MODEL)
+    model_name = model_override or os.getenv("SARVAM_MODEL", FALLBACK_MODEL)
     max_tokens_val = int(os.getenv("SARVAM_MAX_TOKENS", "8192"))
 
     t0 = time.time()
@@ -522,12 +536,22 @@ async def _execute_sarvam_completion(
 
         choices = getattr(response, "choices", None) or []
         if not choices:
-            print("[Sarvam AI] No completion choices returned by SarvamAI SDK.")
+            print(f"[Sarvam AI] No completion choices returned by SarvamAI SDK for {model_name}.")
             return None
 
         choice = choices[0]
+        finish_reason = getattr(choice, "finish_reason", None)
         message = getattr(choice, "message", None)
-        text = getattr(message, "content", "") or ""
+        text = (getattr(message, "content", "") or "").strip()
+
+        # If model exhausted tokens in reasoning (finish_reason == 'length' and text is empty)
+        if not text and model_name != "sarvam-105b-conversations":
+            print(f"[Sarvam AI SDK] {model_name} returned empty content (finish_reason={finish_reason}). Retrying with sarvam-105b-conversations...")
+            return await _execute_sarvam_completion(prompt, temperature=temperature, timeout=timeout, model_override="sarvam-105b-conversations")
+
+        if not text:
+            print(f"[Sarvam AI SDK] {model_name} returned empty response.")
+            return None
 
         usage_obj = getattr(response, "usage", None)
         in_tok = getattr(usage_obj, "prompt_tokens", 0) if usage_obj else 0
@@ -543,19 +567,19 @@ async def _execute_sarvam_completion(
         }
         print(f"[Sarvam AI SDK] Succeeded with {model_name} in {elapsed:.2f}s | in={in_tok} out={out_tok}")
         return {
-            "text": text.strip(),
+            "text": text,
             "usage": usage,
             "model": model_name,
         }
 
     except (asyncio.TimeoutError, TimeoutError):
-        print(f"[Sarvam AI SDK] Timeout reached after {timeout:.0f}s")
+        print(f"[Sarvam AI SDK] Timeout reached after {timeout:.0f}s for {model_name}")
         return None
     except ApiError as exc:
         print(f"[Sarvam AI SDK] API error status={getattr(exc, 'status_code', 'unknown')}: {getattr(exc, 'body', str(exc))}")
         return None
     except Exception as e:
-        print(f"[Sarvam AI SDK] Execution failed: {e}")
+        print(f"[Sarvam AI SDK] Execution failed for {model_name}: {e}")
         return None
 
 
@@ -567,7 +591,8 @@ async def async_generate_json(
 ) -> Dict[str, Any]:
     """
     Multi-tier resilient LLM execution pipeline with true token usage tracking.
-    When USE_SARVAM_PRIMARY is True, Sarvam AI (sarvam-105b) is invoked first.
+    When USE_SARVAM_PRIMARY is True, Sarvam AI (sarvam-105b-conversations) is invoked first.
+    If Sarvam or Gemini fail, they seamlessly fall back to each other.
     """
     exec_result: Optional[Dict[str, Any]] = None
 

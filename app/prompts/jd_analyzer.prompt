@@ -59,6 +59,9 @@ Sections: {{SECTIONS_JSON}}
      d. Preferred Qualifications: 10%
    - Grade: "Strong" (85 - 100), "Good" (70 - 84), "Needs Work" (50 - 69), or "Significant Gaps" (< 50).
    - A requirement may only receive credit when supported by genuine resume evidence.
+   - MULTI-PASS SCORE INTEGRITY:
+     * When candidate has applied enhancements or incorporated missing skills, your score MUST recognize that progression. The score must maintain or increase, never arbitrarily regress.
+     * Bullets labeled [ALREADY_ENHANCED] represent approved, high-caliber evidence; award them full credit across mandatory, technical, and experience categories.
 
 4. Keyword Analysis:
    - "matched_keywords": Directly matched skills and domain terms confirmed in the resume.
@@ -72,6 +75,14 @@ Sections: {{SECTIONS_JSON}}
      * NEVER merge multiple achievements or multiple bullets into a single suggestion.
      * NEVER output multiple <li> tags inside a single enhanced_html. Exactly ONE <li>...</li> per suggestion!
      * If an entry has 3 bullet points, formulate separate, distinct suggestions for each point individually.
+     * STRICT DEDUPLICATION: Output at most ONE suggestion per unique bullet point. NEVER generate multiple variations or duplicate suggestions for the same bullet. Ensure all suggestions across a section target distinct, unique bullets.
+   - ALREADY ENHANCED BULLET DISCIPLINE:
+     * Any bullet labeled [ALREADY_ENHANCED] was already reviewed and upgraded in a prior iteration.
+     * DO NOT propose lateral wording shifts or duplicate suggestions for [ALREADY_ENHANCED] bullets.
+     * Only suggest improvements for unpolished or evidence-deficient bullets.
+     * If all bullets in a section are strong and aligned, return an empty suggestions list [] for that section! An empty suggestions array for well-crafted sections is expected and represents an excellent resume.
+   - MULTI-PASS CONSISTENCY:
+     * Never suggest changes purely for the sake of proposing something different. Different wording is NOT an improvement. Only suggest changes that materially elevate clarity, quantifiable metrics, or alignment with the job description.
    - ID & POINT INDEX PRESERVATION:
      * If the input provides "item_id" and "point_index" (or data-item-id / data-point-index attributes), copy them into "item_id" and "point_index" on the suggestion object so the editor can target the exact bullet with 100% precision!
    - Provide "original_text" (the exact single bullet text in the resume) and "enhanced_html" (the single improved <li>...</li>).

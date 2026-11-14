@@ -47,7 +47,26 @@ def _extract_text_corpus(current_resume: Any) -> str:
         for sec in sections:
             if isinstance(sec, dict):
                 raw = sec.get("content") or sec.get("contentHtml") or ""
-                texts.append(extract_plain_text(raw))
+                if raw:
+                    texts.append(extract_plain_text(raw))
+                items = sec.get("items") or []
+                if isinstance(items, list):
+                    for it in items:
+                        if isinstance(it, dict):
+                            for key in ["title", "company", "role", "project_title", "institution", "summary", "name", "issuer", "category"]:
+                                val = it.get(key)
+                                if isinstance(val, str) and val.strip():
+                                    texts.append(val.strip())
+                            pts = it.get("points") or []
+                            if isinstance(pts, list):
+                                for p in pts:
+                                    if isinstance(p, str) and p.strip():
+                                        texts.append(p.strip())
+                            skills = it.get("skills") or []
+                            if isinstance(skills, list):
+                                for s in skills:
+                                    if isinstance(s, str) and s.strip():
+                                        texts.append(s.strip())
             elif hasattr(sec, "content"):
                 texts.append(extract_plain_text(getattr(sec, "content", "")))
     return " ".join(texts)
@@ -56,14 +75,16 @@ def _extract_text_corpus(current_resume: Any) -> str:
 def _verify_and_sanitize_analysis(
     data: Dict[str, Any],
     current_resume: Any,
-    job_description: Optional[str] = None
+    job_description: Optional[str] = None,
+    applied_bullet_ids: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Independent verification layer:
     1. Checks every AI suggestion against the source resume.
-    2. Filters out suggestions targeting bullets that user has already removed.
+    2. Filters out suggestions targeting bullets that user has already removed or already enhanced.
     3. Flags any newly introduced numbers, metrics, or claims that have no basis in the source document.
     4. Deterministically reconciles matched vs missing keywords against source resume and JD text.
+    5. Prevents stochastic score regression after user applies recommended enhancements.
     """
     if not isinstance(data, dict):
         return data
@@ -71,6 +92,10 @@ def _verify_and_sanitize_analysis(
     source_corpus = _extract_text_corpus(current_resume)
     source_corpus_lower = source_corpus.lower()
     source_numbers = set(re.findall(r"\b(?:\$?\d+(?:\.\d+)?%?|\d+[kKmMbB]\+?)\b", source_corpus))
+
+    applied_set = set(str(k) for k in (applied_bullet_ids or []))
+    if not applied_set and isinstance(current_resume, dict):
+        applied_set = set(str(k) for k in (current_resume.get("applied_bullet_ids") or current_resume.get("applied_suggestion_keys") or []))
 
     enhancements = data.get("section_enhancements", [])
     if isinstance(enhancements, list):
@@ -98,9 +123,20 @@ def _verify_and_sanitize_analysis(
                 else:
                     expanded_suggestions.append(raw_sug)
 
+            seen_targets = set()
+            seen_enhanced = set()
             for sug in expanded_suggestions:
                 orig = (sug.get("original_text") or "").strip()
+                if orig.startswith("[ALREADY_ENHANCED]"):
+                    orig = orig.replace("[ALREADY_ENHANCED]", "").strip()
+                    sug["original_text"] = orig
+
                 orig_clean = re.sub(r"<[^>]+>", " ", orig).strip().lower()
+
+                raw_enh = (sug.get("enhanced_html") or "").strip()
+                if "[ALREADY_ENHANCED]" in raw_enh:
+                    raw_enh = raw_enh.replace("[ALREADY_ENHANCED]", "").strip()
+                    sug["enhanced_html"] = raw_enh
 
                 # If suggestion targets an existing bullet, verify the bullet is actually in current resume.
                 # If user removed this point, discard the suggestion so it does not resurrect.
@@ -113,8 +149,41 @@ def _verify_and_sanitize_analysis(
                             print(f"[Wiser Filter] Discarding suggestion for removed bullet: '{orig[:40]}...'")
                             continue
 
+                # Target identifier
+                target_key = None
+                item_id = sug.get("item_id") or sug.get("target_item_id")
+                point_idx = sug.get("point_index")
+                if item_id is not None and point_idx is not None:
+                    target_key = f"{item_id}:{point_idx}"
+                elif orig_clean:
+                    target_key = f"text:{orig_clean[:60]}"
+
+                # Filter out suggestions targeting bullets that user has ALREADY enhanced!
+                if target_key and (
+                    target_key in applied_set
+                    or (item_id and str(item_id) in applied_set)
+                    or (sug.get("id") and str(sug.get("id")) in applied_set)
+                ):
+                    print(f"[Wiser Filter] Discarding suggestion for already enhanced bullet ({target_key})")
+                    continue
+
+                # Deduplication check: at most one suggestion per target bullet point
+                if target_key and target_key in seen_targets:
+                    print(f"[Wiser Filter] Discarding duplicate suggestion targeting same bullet ({target_key})")
+                    continue
+
+                clean_enh = re.sub(r"<[^>]+>", " ", raw_enh).strip().lower()
+                if clean_enh and clean_enh in seen_enhanced:
+                    print(f"[Wiser Filter] Discarding duplicate enhancement text: {clean_enh[:40]}")
+                    continue
+
+                if target_key:
+                    seen_targets.add(target_key)
+                if clean_enh:
+                    seen_enhanced.add(clean_enh)
+
                 valid_suggestions.append(sug)
-                enhanced = (sug.get("enhanced_html") or "").strip()
+                enhanced = raw_enh
 
                 # Ensure bullet format (<li>) for experience and projects or list-like originals
                 sec_title_lower = (sec.get("section_title") or "").lower()
@@ -166,64 +235,15 @@ def _verify_and_sanitize_analysis(
 
             sec["suggestions"] = valid_suggestions
 
-    # Deterministic keyword reconciliation against actual resume and JD
-    ats_check = data.get("ats_check")
-    if isinstance(ats_check, dict):
-        source_corpus_lower = source_corpus.lower()
-        jd_lower = (job_description or "").lower() if job_description else ""
+    # ── Deterministic, Industry-Standard Python ATS Evaluation ──
+    from .ats_scorer import compute_legit_ats_evaluation
 
-        raw_matched = ats_check.get("matched_keywords") or []
-        raw_missing = ats_check.get("missing_keywords") or []
-        raw_recommended = ats_check.get("recommended_keywords") or []
-
-        reconciled_matched = []
-        for kw in raw_matched:
-            if isinstance(kw, str) and kw.strip():
-                reconciled_matched.append(kw.strip())
-
-        reconciled_missing = []
-        for kw in raw_missing:
-            if not isinstance(kw, str) or not kw.strip():
-                continue
-            k_clean = kw.strip()
-            k_lower = k_clean.lower()
-            pattern = rf"\b{re.escape(k_lower)}\b"
-
-            # If keyword already exists in candidate's resume, it is NOT missing!
-            if re.search(pattern, source_corpus_lower) or k_lower in source_corpus_lower:
-                if k_clean not in reconciled_matched:
-                    reconciled_matched.append(k_clean)
-            else:
-                # If JD is present, verify term is actually in the JD
-                if jd_lower:
-                    if re.search(pattern, jd_lower) or k_lower in jd_lower:
-                        reconciled_missing.append(k_clean)
-                else:
-                    reconciled_missing.append(k_clean)
-
-        reconciled_recommended = []
-        for kw in raw_recommended:
-            if not isinstance(kw, str) or not kw.strip():
-                continue
-            k_clean = kw.strip()
-            k_lower = k_clean.lower()
-            pattern = rf"\b{re.escape(k_lower)}\b"
-            if re.search(pattern, source_corpus_lower) or k_lower in source_corpus_lower:
-                if k_clean not in reconciled_matched:
-                    reconciled_matched.append(k_clean)
-            else:
-                reconciled_recommended.append(k_clean)
-
-        ats_check["matched_keywords"] = list(dict.fromkeys(reconciled_matched))
-        if "missing_keywords" in ats_check:
-            ats_check["missing_keywords"] = list(dict.fromkeys(reconciled_missing))
-        if "recommended_keywords" in ats_check:
-            ats_check["recommended_keywords"] = list(dict.fromkeys(reconciled_recommended))
-
-        ats_check.setdefault(
-            "evaluation_disclosure",
-            "This assessment evaluates common resume quality, parseability, and role alignment. It is not an employer's proprietary ATS score and does not guarantee interview shortlisting."
-        )
+    legit_ats = compute_legit_ats_evaluation(
+        current_resume=current_resume if isinstance(current_resume, dict) else {},
+        ai_data=data,
+        job_description=job_description
+    )
+    data["ats_check"] = legit_ats
 
     return data
 
@@ -232,9 +252,10 @@ def _build_jd_prompt(
     job_description: str,
     current_resume: Dict[str, Any],
     previous_resumes: Optional[List[Dict[str, Any]]] = None,
-    allow_bold_text: bool = True
+    allow_bold_text: bool = True,
+    applied_bullet_ids: Optional[Any] = None
 ) -> str:
-    compact = compact_resume(current_resume)
+    compact = compact_resume(current_resume, applied_bullet_ids=applied_bullet_ids)
     previous_resumes_block = compact_previous_resumes(previous_resumes, limit=2)
     prompt_template = load_prompt("jd_analyzer.prompt")
 
@@ -259,9 +280,10 @@ def _build_jd_prompt(
 
 def _build_ats_prompt(
     current_resume: Dict[str, Any],
-    allow_bold_text: bool = True
+    allow_bold_text: bool = True,
+    applied_bullet_ids: Optional[Any] = None
 ) -> str:
-    compact = compact_resume(current_resume)
+    compact = compact_resume(current_resume, applied_bullet_ids=applied_bullet_ids)
     prompt_template = load_prompt("wiser_ats.prompt")
 
     if allow_bold_text:
@@ -281,57 +303,61 @@ async def async_analyze_jd_and_ats(
     job_description: str,
     current_resume: Dict[str, Any],
     previous_resumes: Optional[List[Dict[str, Any]]] = None,
-    allow_bold_text: bool = True
+    allow_bold_text: bool = True,
+    applied_bullet_ids: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Non-blocking async Job Description matching + ATS check + bullet enhancements.
     """
-    prompt = _build_jd_prompt(job_description, current_resume, previous_resumes, allow_bold_text)
+    prompt = _build_jd_prompt(job_description, current_resume, previous_resumes, allow_bold_text, applied_bullet_ids=applied_bullet_ids)
     print("[Wiser JD-ATS Help] Executing async Wiser AI query...")
     data = await async_generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
-    return _verify_and_sanitize_analysis(data, current_resume, job_description)
+    return _verify_and_sanitize_analysis(data, current_resume, job_description, applied_bullet_ids=applied_bullet_ids)
 
 
 def analyze_jd_and_ats(
     job_description: str,
     current_resume: Dict[str, Any],
     previous_resumes: Optional[List[Dict[str, Any]]] = None,
-    allow_bold_text: bool = True
+    allow_bold_text: bool = True,
+    applied_bullet_ids: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Synchronous Job Description matching + ATS check + bullet enhancements.
     """
-    prompt = _build_jd_prompt(job_description, current_resume, previous_resumes, allow_bold_text)
+    prompt = _build_jd_prompt(job_description, current_resume, previous_resumes, allow_bold_text, applied_bullet_ids=applied_bullet_ids)
     print("[Wiser JD-ATS Help] Executing sync Wiser AI query...")
     data = generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
-    return _verify_and_sanitize_analysis(data, current_resume, job_description)
+    return _verify_and_sanitize_analysis(data, current_resume, job_description, applied_bullet_ids=applied_bullet_ids)
 
 
 async def async_analyze_standalone_ats(
     current_resume: Dict[str, Any],
-    allow_bold_text: bool = True
+    allow_bold_text: bool = True,
+    applied_bullet_ids: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Non-blocking async standalone ATS audit without a job description.
     """
-    prompt = _build_ats_prompt(current_resume, allow_bold_text)
+    prompt = _build_ats_prompt(current_resume, allow_bold_text, applied_bullet_ids=applied_bullet_ids)
     print("[Wiser Standalone ATS] Executing async Wiser AI query...")
     data = await async_generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
-    return _verify_and_sanitize_analysis(data, current_resume)
+    return _verify_and_sanitize_analysis(data, current_resume, applied_bullet_ids=applied_bullet_ids)
 
 
 def analyze_standalone_ats(
     current_resume: Dict[str, Any],
-    allow_bold_text: bool = True
+    allow_bold_text: bool = True,
+    applied_bullet_ids: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     Synchronous standalone ATS audit without a job description.
     """
-    prompt = _build_ats_prompt(current_resume, allow_bold_text)
+    prompt = _build_ats_prompt(current_resume, allow_bold_text, applied_bullet_ids=applied_bullet_ids)
     print("[Wiser Standalone ATS] Executing sync Wiser AI query...")
     data = generate_json(prompt, temperature=0.0, task="jd")
     data["_ai_model"] = "Wiser AI"
-    return _verify_and_sanitize_analysis(data, current_resume)
+    return _verify_and_sanitize_analysis(data, current_resume, applied_bullet_ids=applied_bullet_ids)

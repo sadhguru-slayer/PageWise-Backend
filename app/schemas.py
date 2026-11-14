@@ -379,12 +379,14 @@ class JDAnalyzeRequest(BaseModel):
     job_description: str
     current_resume_override: Optional[Any] = None
     include_all_user_resumes: Optional[bool] = False
+    applied_bullet_ids: Optional[List[str]] = None
 
 
 class ATSAnalyzeRequest(BaseModel):
     """Request payload for standalone Wiser ATS audit (no JD required)."""
     resume_id: Optional[int] = None
     current_resume_override: Optional[Any] = None
+    applied_bullet_ids: Optional[List[str]] = None
 
 
 # ─── Usage Stats Schema ───────────────────────────────────────────────────────

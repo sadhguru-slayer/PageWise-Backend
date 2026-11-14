@@ -51,6 +51,9 @@ Sections: {{SECTIONS_JSON}}
    - 70 - 84: "Good"
    - 50 - 69: "Needs Improvement"
    - Below 50: "Significant Issues"
+   - MULTI-PASS SCORE INTEGRITY:
+     * When evaluating a resume where the candidate has applied enhancements or incorporated recommended competencies, your score MUST reflect that progression. The score must maintain or increase, never arbitrarily regress.
+     * Bullets labeled [ALREADY_ENHANCED] represent approved, high-caliber evidence; award them full credit across structure, specificity, competencies, and impact.
 
 4. Keyword Positioning & Gap Analysis:
    - "matched_keywords": High-value, domain-relevant skills and tools confirmed in the resume.
@@ -64,6 +67,14 @@ Sections: {{SECTIONS_JSON}}
      * NEVER merge multiple achievements or multiple bullets into a single suggestion.
      * Exactly ONE <li>...</li> per suggestion! Never output multiple <li> tags inside a single enhanced_html.
      * If an entry has multiple points, formulate separate distinct suggestions for each point individually.
+     * STRICT DEDUPLICATION: Output at most ONE suggestion per unique bullet point. NEVER generate multiple variations or duplicate suggestions for the same bullet. Ensure all suggestions across a section target distinct, unique bullets.
+   - ALREADY ENHANCED BULLET DISCIPLINE:
+     * Any bullet labeled [ALREADY_ENHANCED] was already reviewed and upgraded in a prior iteration.
+     * DO NOT propose lateral wording shifts or duplicate suggestions for [ALREADY_ENHANCED] bullets.
+     * Only suggest improvements for unpolished or evidence-deficient bullets.
+     * If all bullets in a section are strong and aligned, return an empty suggestions list [] for that section! An empty suggestions array for well-crafted sections is expected and represents an excellent resume.
+   - MULTI-PASS CONSISTENCY:
+     * Never suggest changes purely for the sake of proposing something different. Different wording is NOT an improvement. Only suggest changes that materially elevate clarity, quantifiable metrics, or role-relevant competencies.
    - ID & POINT INDEX PRESERVATION:
      * If the input provides "item_id" and "point_index", copy them into "item_id" and "point_index" on the suggestion object for 100% precision!
    - MANDATORY VERIFICATION METADATA FOR EVERY SUGGESTION:

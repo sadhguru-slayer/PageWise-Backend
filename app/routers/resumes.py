@@ -749,11 +749,16 @@ async def analyze_job_description(
     try:
         user_prefs = parse_json_field(current_user.preferences_json, {})
         allow_bold = bool(user_prefs.get("allow_bold_text", True))
+        applied_ids = payload.applied_bullet_ids
+        if not applied_ids and isinstance(payload.current_resume_override, dict):
+            applied_ids = payload.current_resume_override.get("applied_bullet_ids") or payload.current_resume_override.get("applied_suggestion_keys")
+
         analysis_result = await async_analyze_jd_and_ats(
             job_description=payload.job_description,
             current_resume=current_resume_dict,
             previous_resumes=previous_resumes_list,
-            allow_bold_text=allow_bold
+            allow_bold_text=allow_bold,
+            applied_bullet_ids=applied_ids
         )
 
         # Persist analysis only on editable (unlocked) workspaces
@@ -870,9 +875,14 @@ async def analyze_standalone_resume_ats(
     try:
         user_prefs = parse_json_field(current_user.preferences_json, {})
         allow_bold = bool(user_prefs.get("allow_bold_text", True))
+        applied_ids = payload.applied_bullet_ids
+        if not applied_ids and isinstance(payload.current_resume_override, dict):
+            applied_ids = payload.current_resume_override.get("applied_bullet_ids") or payload.current_resume_override.get("applied_suggestion_keys")
+
         analysis_result = await async_analyze_standalone_ats(
             current_resume=current_resume_dict,
-            allow_bold_text=allow_bold
+            allow_bold_text=allow_bold,
+            applied_bullet_ids=applied_ids
         )
 
         usage_info = analysis_result.pop("_usage", {}) if isinstance(analysis_result, dict) else {}
