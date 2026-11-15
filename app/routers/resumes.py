@@ -529,6 +529,14 @@ async def parse_pdf_resume(
         print("[parse-pdf] Sending extracted text to Wiser AI...")
         user_prefs = parse_json_field(current_user.preferences_json, {})
         allow_bold = bool(user_prefs.get("allow_bold_text", True))
+        # Automatically disable bold suggestions for structured sections to keep bullets clean
+        sections_check = current_resume_dict.get("sections_json") or []
+        if any(isinstance(sec, dict) and isinstance(sec.get("items"), list) and len(sec.get("items", [])) > 0 for sec in sections_check):
+            allow_bold = False
+        # Automatically disable bold suggestions for structured sections to keep bullets clean
+        sections_check = current_resume_dict.get("sections_json") or []
+        if any(isinstance(sec, dict) and isinstance(sec.get("items"), list) and len(sec.get("items", [])) > 0 for sec in sections_check):
+            allow_bold = False
         parsed_data = await async_parse_resume_with_wiser_ai(extracted_text, allow_bold_text=allow_bold)
         print("[parse-pdf] Wiser AI parsing completed successfully.")
     except ValueError as ve:

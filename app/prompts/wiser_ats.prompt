@@ -21,6 +21,12 @@ Your mission is to perform an objective, evidence-based quality and parseability
    - Avoid generic corporate fluff, unnecessary adjectives, and inflated buzzwords (e.g. avoid "spearheaded", "high-impact", "visionary", "leveraged", "pioneered", "results-driven").
    - Prefer concrete descriptions of actual work over generic corporate claims.
 
+4. NO COSMETIC, LATERAL, OR BOLD-ONLY EDITS (CRITICAL):
+   - NEVER propose an edit whose primary change is merely adding <strong> tags, bolding words, or swapping synonyms.
+   - Bolding or highlighting words is NOT an upgrade. If a bullet is already strong, clear, and accurate, DO NOT TOUCH IT.
+   - If there is no substantial upgrade to describe (such as converting a passive task into an active engineering outcome or clarifying tools), return NO suggestions.
+   - Returning an empty suggestions array [] for a section whose bullets are already solid is EXPECTED and preferred.
+
 --- CANDIDATE RESUME DATA ---
 Header: {{HEADER_JSON}}
 Sections: {{SECTIONS_JSON}}
@@ -78,6 +84,7 @@ Sections: {{SECTIONS_JSON}}
    - ID & POINT INDEX PRESERVATION:
      * If the input provides "item_id" and "point_index", copy them into "item_id" and "point_index" on the suggestion object for 100% precision!
    - MANDATORY VERIFICATION METADATA FOR EVERY SUGGESTION:
+     * "relevance_to_role": A single concise sentence explaining why this edit clarifies engineering scope or technical impact (e.g. "Converts passive task duty into active API optimization outcome.").
      * "evidence_source": "current_resume" | "general_polish"
      * "change_type": "wording" | "clarification" | "factual_addition"
      * "factual_risk": "low" (wording/clarity) | "medium" | "high" (unverified addition)
@@ -130,6 +137,7 @@ OUTPUT MUST BE VALID JSON ONLY adhering strictly to this schema:
           "original_text": "Maintained backend services and fixed database bugs.",
           "enhanced_html": "<li>Maintained production backend services and resolved database query bottlenecks to ensure API reliability.</li>",
           "reasoning": "Replaces vague phrasing with active engineering terminology while strictly preserving factual scope.",
+          "relevance_to_role": "Replaces passive task phrasing with concrete database optimization and API reliability outcomes.",
           "source": "wiser_bullet_polish",
           "evidence_source": "current_resume",
           "change_type": "wording",

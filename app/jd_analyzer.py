@@ -177,6 +177,15 @@ def _verify_and_sanitize_analysis(
                     print(f"[Wiser Filter] Discarding duplicate enhancement text: {clean_enh[:40]}")
                     continue
 
+                # Filter out cosmetic / bold-only / identical suggestions
+                orig_no_tags = re.sub(r"<[^>]+>", " ", orig).strip().lower()
+                enh_no_tags = re.sub(r"<[^>]+>", " ", raw_enh).strip().lower()
+                orig_words = re.findall(r"\b\w+\b", orig_no_tags)
+                enh_words = re.findall(r"\b\w+\b", enh_no_tags)
+                if orig_words and orig_words == enh_words:
+                    print(f"[Wiser Filter] Discarding cosmetic/bold-only suggestion with identical words: '{orig[:40]}...'")
+                    continue
+
                 if target_key:
                     seen_targets.add(target_key)
                 if clean_enh:
@@ -232,6 +241,7 @@ def _verify_and_sanitize_analysis(
                     sug.setdefault("missing_information", [])
 
                 sug.setdefault("evidence_source", "current_resume" if orig else "role_clarification")
+                sug.setdefault("relevance_to_role", sug.get("relevance_to_role") or sug.get("reasoning") or "")
 
             sec["suggestions"] = valid_suggestions
 
@@ -260,9 +270,9 @@ def _build_jd_prompt(
     prompt_template = load_prompt("jd_analyzer.prompt")
 
     if allow_bold_text:
-        bold_rule = "Use bold <strong> tags sparingly for keywords and metrics in enhanced_html."
+        bold_rule = "Use bold <strong> tags sparingly for keywords and metrics in enhanced_html. NEVER suggest a bullet change whose only modification is wrapping existing terms in bold tags."
     else:
-        bold_rule = "DO NOT include any <strong> or <b> tags in enhanced_html. Keep enhanced bullets clean and unbolded, as professional resumes do not use inline bold words."
+        bold_rule = "STRICT BAN ON BOLD TAGS: DO NOT include any <strong> or <b> tags in enhanced_html. Bullets must be clean plain text inside <li>...</li>."
 
     jd_text = (job_description or "").strip()
     if len(jd_text) > 12000:
@@ -287,9 +297,9 @@ def _build_ats_prompt(
     prompt_template = load_prompt("wiser_ats.prompt")
 
     if allow_bold_text:
-        bold_rule = "Use bold <strong> tags sparingly for keywords and metrics in enhanced_html."
+        bold_rule = "Use bold <strong> tags sparingly for keywords and metrics in enhanced_html. NEVER suggest a bullet change whose only modification is wrapping existing terms in bold tags."
     else:
-        bold_rule = "DO NOT include any <strong> or <b> tags in enhanced_html. Keep enhanced bullets clean and unbolded."
+        bold_rule = "STRICT BAN ON BOLD TAGS: DO NOT include any <strong> or <b> tags in enhanced_html. Bullets must be clean plain text inside <li>...</li>."
 
     return (
         prompt_template

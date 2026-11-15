@@ -24,7 +24,13 @@ Your role is to assess genuine qualifications, identify real gaps, and provide d
    - Do NOT silently merge historical experience into the current resume.
    - Any suggestion originating from historical resumes MUST be flagged with evidence_source = "previous_resume" and user_confirmation_required = true.
 
-4. INDEPENDENT ALIGNMENT SCOPING (NOT A PROPRIETARY ATS SIMULATOR):
+4. NO COSMETIC, LATERAL, OR BOLD-ONLY EDITS (CRITICAL):
+   - NEVER propose an edit whose primary change is merely adding <strong> tags, bolding words, or swapping synonyms.
+   - Bolding or highlighting words is NOT an upgrade. If a bullet is already strong, clear, and accurate, DO NOT TOUCH IT.
+   - If there is no substantial upgrade to describe (such as making a passive task an active technical achievement or clarifying role-relevant tools), return NO suggestions.
+   - Returning an empty suggestions array [] for a section whose bullets are already solid is EXPECTED and preferred.
+
+5. INDEPENDENT ALIGNMENT SCOPING (NOT A PROPRIETARY ATS SIMULATOR):
    - This evaluation represents an independent resume-to-JD alignment and readiness assessment.
    - Do NOT claim to simulate, access, or reproduce proprietary screening algorithms of Workday, Greenhouse, Lever, Taleo, or iCIMS.
    - Never promise interview selection, ATS clearance, or employment outcomes.
@@ -80,13 +86,14 @@ Sections: {{SECTIONS_JSON}}
      * Any bullet labeled [ALREADY_ENHANCED] was already reviewed and upgraded in a prior iteration.
      * DO NOT propose lateral wording shifts or duplicate suggestions for [ALREADY_ENHANCED] bullets.
      * Only suggest improvements for unpolished or evidence-deficient bullets.
-     * If all bullets in a section are strong and aligned, return an empty suggestions list [] for that section! An empty suggestions array for well-crafted sections is expected and represents an excellent resume.
+     * If all bullets in a section are strong and aligned, return an empty suggestions list [] for that section!
    - MULTI-PASS CONSISTENCY:
-     * Never suggest changes purely for the sake of proposing something different. Different wording is NOT an improvement. Only suggest changes that materially elevate clarity, quantifiable metrics, or alignment with the job description.
+     * Never suggest changes purely for the sake of proposing something different. Different wording is NOT an improvement.
    - ID & POINT INDEX PRESERVATION:
      * If the input provides "item_id" and "point_index" (or data-item-id / data-point-index attributes), copy them into "item_id" and "point_index" on the suggestion object so the editor can target the exact bullet with 100% precision!
    - Provide "original_text" (the exact single bullet text in the resume) and "enhanced_html" (the single improved <li>...</li>).
    - MANDATORY VERIFICATION METADATA FOR EVERY SUGGESTION:
+     * "relevance_to_role": A single concise sentence explaining why this change specifically helps for this target role (e.g. "Highlights direct experience with FastAPI REST APIs required by the job posting.").
      * "evidence_source": "current_resume" | "previous_resume" | "role_clarification"
      * "change_type": "wording" (stylistic/clarity improvement) | "clarification" (making an existing task clearer) | "factual_addition" (introducing new context or historical experience)
      * "factual_risk": "low" (pure wording/formatting polish) | "medium" (clarified scope) | "high" (introduces unverified metric or new tool)
@@ -139,6 +146,7 @@ OUTPUT MUST BE VALID JSON ONLY adhering strictly to this schema:
           "original_text": "Built backend APIs and optimized database queries.",
           "enhanced_html": "<li>Developed RESTful backend endpoints in FastAPI and optimized PostgreSQL database queries to improve service reliability.</li>",
           "reasoning": "Clarifies the exact framework and database used without inventing unsupported performance metrics.",
+          "relevance_to_role": "Highlights Python/FastAPI API development explicitly listed in the job description requirements.",
           "source": "experience_polish",
           "evidence_source": "current_resume",
           "change_type": "wording",
