@@ -1,8 +1,12 @@
+import os
 import sys
 from datetime import datetime
 import json
 
-sys.path.insert(0, 'backend')
+# Support running directly from repository root or inside /app in docker
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, '/app')
+
 from app.database import SessionLocal
 from app.models import BlogPost
 
