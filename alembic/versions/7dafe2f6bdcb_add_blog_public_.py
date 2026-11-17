@@ -40,7 +40,7 @@ def upgrade() -> None:
             sa.Column('tags_json', sa.Text(), nullable=False, server_default='[]'),
             sa.Column('reading_time_minutes', sa.Integer(), nullable=False, server_default='5'),
             sa.Column('views_count', sa.Integer(), nullable=False, server_default='0'),
-            sa.Column('is_published', sa.Boolean(), nullable=False, server_default=sa.text('0')),
+            sa.Column('is_published', sa.Boolean(), nullable=False, server_default=sa.text('false')),
             sa.Column('published_at', sa.DateTime(), nullable=True),
             sa.Column('created_at', sa.DateTime(), nullable=False, server_default=sa.func.now()),
             sa.Column('updated_at', sa.DateTime(), nullable=False, server_default=sa.func.now()),
