@@ -319,3 +319,29 @@ class CustomSectionSchema(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+
+class BlogPost(Base):
+    """
+    Blog posts authored by administrators, displayed on public /blog and /blog/[slug].
+    Powers SEO visibility, authority backlinks, and organic search acquisition.
+    """
+    __tablename__ = "blog_posts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    slug = Column(String(200), unique=True, index=True, nullable=False)
+    title = Column(String(300), nullable=False)
+    summary = Column(Text, nullable=False)
+    content_html = Column(Text, nullable=False)
+    content_json = Column(Text, nullable=True)
+    cover_image_url = Column(String(500), nullable=True)
+    author_name = Column(String(100), default="PageWise Editorial", nullable=False)
+    author_role = Column(String(100), default="Career & Engineering Lead", nullable=True)
+    tags_json = Column(Text, default="[]", nullable=False)
+    reading_time_minutes = Column(Integer, default=5, nullable=False)
+    views_count = Column(Integer, default=0, nullable=False)
+    is_published = Column(Boolean, default=False, index=True, nullable=False)
+    published_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+

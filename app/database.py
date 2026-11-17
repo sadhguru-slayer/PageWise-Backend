@@ -88,6 +88,14 @@ def run_auto_migrations():
                 except Exception as fe:
                     print(f"[AutoMigration] Notice creating feedbacks table: {fe}")
 
+            # BlogPosts table auto-creation
+            if "blog_posts" not in existing_tables:
+                try:
+                    from .models import BlogPost
+                    BlogPost.__table__.create(bind=engine, checkfirst=True)
+                except Exception as be:
+                    print(f"[AutoMigration] Notice creating blog_posts table: {be}")
+
             # Soft deletes
             for table in ["resumes", "resume_templates", "exported_resumes"]:
                 if table in existing_tables:

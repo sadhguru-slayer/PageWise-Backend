@@ -611,3 +611,68 @@ class CustomSectionSchemaOut(BaseModel):
         from_attributes = True
 
 
+# ─── Blog Post Schemas ────────────────────────────────────────────────────────
+
+class BlogPostBase(BaseModel):
+    title: str = Field(..., min_length=3, max_length=300)
+    slug: Optional[str] = Field(None, max_length=200)
+    summary: str
+    content_html: str
+    content_json: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    author_name: str = 'PageWise Editorial'
+    author_role: Optional[str] = 'Career & Engineering Lead'
+    tags: List[str] = []
+    reading_time_minutes: int = 5
+    is_published: bool = False
+
+
+class BlogPostCreate(BlogPostBase):
+    pass
+
+
+class BlogPostUpdate(BaseModel):
+    title: Optional[str] = None
+    slug: Optional[str] = None
+    summary: Optional[str] = None
+    content_html: Optional[str] = None
+    content_json: Optional[str] = None
+    cover_image_url: Optional[str] = None
+    author_name: Optional[str] = None
+    author_role: Optional[str] = None
+    tags: Optional[List[str]] = None
+    reading_time_minutes: Optional[int] = None
+    is_published: Optional[bool] = None
+
+
+class BlogPostSummaryOut(BaseModel):
+    id: int
+    slug: str
+    title: str
+    summary: str
+    cover_image_url: Optional[str] = None
+    author_name: str
+    author_role: Optional[str] = None
+    tags: List[str] = []
+    reading_time_minutes: int
+    views_count: int
+    is_published: bool
+    published_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BlogPostOut(BlogPostSummaryOut):
+    content_html: str
+    content_json: Optional[str] = None
+
+
+class BlogListResponse(BaseModel):
+    items: List[BlogPostSummaryOut]
+    total: int
+    page: int
+    limit: int
+    total_pages: int

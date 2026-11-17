@@ -28,7 +28,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import engine, Base, run_auto_migrations
-from app.routers import auth, resumes, exports, payments, admin, feedback
+from app.routers import auth, resumes, exports, payments, admin, feedback, blogs
 
 # Initialize database tables automatically if not already present
 try:
@@ -73,6 +73,7 @@ app.include_router(exports.router)
 app.include_router(payments.router)
 app.include_router(admin.router)
 app.include_router(feedback.router)
+app.include_router(blogs.router)
 
 
 @app.get("/")

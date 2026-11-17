@@ -44,6 +44,14 @@ def get_payment_config(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/public-plans")
+def get_public_plans(db: Session = Depends(get_db)):
+    """
+    Public endpoint exposing active published pricing tiers for landing and pricing pages.
+    """
+    return list_active_plans(db=db)
+
+
 @router.get("/plans")
 def list_active_plans(db: Session = Depends(get_db)):
     """Returns active, published subscription plans configured by admin (excludes archived)."""
